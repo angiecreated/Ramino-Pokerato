@@ -1,5 +1,5 @@
-export const SUITS = [“♠”, “♥”, “♦”, “♣”];
-export const RANKS = [“A”, “2”, “3”, “4”, “5”, “6”, “7”, “8”, “9”, “10”, “J”, “Q”, “K”];
+export const SUITS = [’\u2660’, ‘\u2665’, ‘\u2666’, ‘\u2663’];
+export const RANKS = [‘A’, ‘2’, ‘3’, ‘4’, ‘5’, ‘6’, ‘7’, ‘8’, ‘9’, ‘10’, ‘J’, ‘Q’, ‘K’];
 
 export const RANK_VALUES = {
 A: 11, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7,
@@ -12,14 +12,14 @@ A: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7,
 };
 
 export const APERTURE_TYPES = [
-{ id: “coppia”, label: “COPPIA”, emoji: “✌️”, desc: “2 carte dello stesso valore” },
-{ id: “doppia_coppia”, label: “DOPPIA COPPIA”, emoji: “🂠”, desc: “2 coppie” },
-{ id: “tris”, label: “TRIS”, emoji: “🔱”, desc: “3 carte dello stesso valore” },
-{ id: “full”, label: “FULL”, emoji: “🏠”, desc: “Tris + Coppia” },
-{ id: “poker”, label: “POKER”, emoji: “♠️”, desc: “4 carte dello stesso valore” },
-{ id: “scala_colore”, label: “SCALA COLORE”, emoji: “🌈”, desc: “5 carte in sequenza stesso seme” },
-{ id: “scala_40”, label: “SCALA 40”, emoji: “📏”, desc: “Sequenza >= 40 punti stesso seme” },
-{ id: “chiusura”, label: “CHIUSURA”, emoji: “⚡”, desc: “Scendi e chiudi nello stesso turno” },
+{ id: ‘coppia’, label: ‘COPPIA’, desc: ‘2 carte dello stesso valore’ },
+{ id: ‘doppia_coppia’, label: ‘DOPPIA COPPIA’, desc: ‘2 coppie’ },
+{ id: ‘tris’, label: ‘TRIS’, desc: ‘3 carte dello stesso valore’ },
+{ id: ‘full’, label: ‘FULL’, desc: ‘Tris + Coppia’ },
+{ id: ‘poker’, label: ‘POKER’, desc: ‘4 carte dello stesso valore’ },
+{ id: ‘scala_colore’, label: ‘SCALA COLORE’, desc: ‘5 carte in sequenza stesso seme’ },
+{ id: ‘scala_40’, label: ‘SCALA 40’, desc: ‘Sequenza >= 40 punti stesso seme’ },
+{ id: ‘chiusura’, label: ‘CHIUSURA’, desc: ‘Scendi e chiudi nello stesso turno’ },
 ];
 
 export function createDeck() {
@@ -28,7 +28,7 @@ for (let d = 0; d < 2; d++) {
 for (const suit of SUITS) {
 for (const rank of RANKS) {
 deck.push({
-id: `${rank}${suit}_${d}`,
+id: rank + suit + ‘*’ + d,
 rank,
 suit,
 value: RANK_VALUES[rank],
@@ -36,7 +36,7 @@ isJoker: false
 });
 }
 }
-deck.push({ id: `JOKER_${d}`, rank: “JOKER”, suit: “🃏”, value: 25, isJoker: true });
+deck.push({ id: ’JOKER*’ + d, rank: ‘JOKER’, suit: ‘\ud83c\udfcb’, value: 25, isJoker: true });
 }
 return shuffle(deck);
 }
@@ -50,13 +50,12 @@ const j = Math.floor(Math.random() * (i + 1));
 return a;
 }
 
-// Asso vale 11 con altre carte, 1 se è l’ultima carta in mano
 export function handPoints(cards) {
 if (!cards || cards.length === 0) return 0;
 const hasOtherCards = cards.length > 1;
 return cards.reduce((s, c) => {
 if (c.isJoker) return s + 25;
-if (c.rank === “A”) return s + (hasOtherCards ? 11 : 1);
+if (c.rank === ‘A’) return s + (hasOtherCards ? 11 : 1);
 return s + (RANK_VALUES[c.rank] || 0);
 }, 0);
 }
@@ -67,19 +66,17 @@ if (card.isJoker) return 25;
 return RANK_VALUES[card.rank] || 0;
 }
 
-// Auto-detect apertura type from cards (no jokers allowed)
 export function detectApertura(cards) {
 if (!cards || cards.length === 0) return null;
 const hasJoker = cards.some(c => c.isJoker);
 if (hasJoker) return null;
-
-if (isCoppia(cards)) return “coppia”;
-if (isDoppiaCoppia(cards)) return “doppia_coppia”;
-if (isTris(cards)) return “tris”;
-if (isFull(cards)) return “full”;
-if (isPoker(cards)) return “poker”;
-if (isScalaColore(cards)) return “scala_colore”;
-if (isScala40(cards)) return “scala_40”;
+if (isCoppia(cards)) return ‘coppia’;
+if (isDoppiaCoppia(cards)) return ‘doppia_coppia’;
+if (isTris(cards)) return ‘tris’;
+if (isFull(cards)) return ‘full’;
+if (isPoker(cards)) return ‘poker’;
+if (isScalaColore(cards)) return ‘scala_colore’;
+if (isScala40(cards)) return ‘scala_40’;
 return null;
 }
 
@@ -136,26 +133,21 @@ const orders = cards.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
 for (let i = 1; i < orders.length; i++) {
 if (orders[i] !== orders[i - 1] + 1) return false;
 }
-// Use fixed values (not asso special rule) for scala 40 calculation
 const total = cards.reduce((s, c) => s + (RANK_VALUES[c.rank] || 0), 0);
 return total >= 40;
 }
 
-// Valid combination for table play (can include jokers)
 export function isValidCombination(cards) {
 if (!cards || cards.length < 2) return false;
 const nonJokers = cards.filter(c => !c.isJoker);
 const jokerCount = cards.filter(c => c.isJoker).length;
-
 if (nonJokers.length === 0) return false;
 
-// Same rank (tris/poker style)
 const rank = nonJokers[0].rank;
 if (nonJokers.every(c => c.rank === rank)) {
 if (cards.length >= 2 && cards.length <= 4) return true;
 }
 
-// Sequential same suit (scala style)
 const suit = nonJokers[0].suit;
 if (nonJokers.every(c => c.suit === suit)) {
 const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
@@ -169,7 +161,6 @@ if (gaps <= jokerCount && cards.length >= 3) return true;
 return false;
 }
 
-// Check if hand can be closed (all cards form valid combos, one card to discard)
 export function canChiuderInMano(cardsToPlay) {
 if (!cardsToPlay || cardsToPlay.length === 0) return false;
 return tryGroupCards([…cardsToPlay]);
@@ -178,7 +169,6 @@ return tryGroupCards([…cardsToPlay]);
 function tryGroupCards(cards) {
 if (cards.length === 0) return true;
 if (cards.length < 2) return false;
-
 for (let size = 2; size <= Math.min(cards.length, 13); size++) {
 const combos = getCombinations(cards, size);
 for (const combo of combos) {
