@@ -234,6 +234,7 @@ export function isValidTableCombination(cards) {
 }
 
 // For adding to existing table combos - jokers allowed
+// Also handles complex combos like doppia coppia where adding a card extends one group
 export function isValidCombination(cards) {
   if (!cards || cards.length < 2) return false;
   const nonJokers = cards.filter(c => !c.isJoker);
@@ -241,20 +242,46 @@ export function isValidCombination(cards) {
   if (nonJokers.length === 0) return false;
   if (jokerCount > 1) return false;
 
-  // Tris/poker - no duplicate suits
+  // Simple tris/poker - all same rank, no duplicate suits
   const rank = nonJokers[0].rank;
   if (nonJokers.every(c => c.rank === rank) && cards.length >= 2 && cards.length <= 4) {
     const suits = nonJokers.map(c => c.suit);
     if (new Set(suits).size === suits.length) return true;
   }
 
-  // Scala
+  // Scala - all same suit, sequential
   const suit = nonJokers[0].suit;
   if (nonJokers.every(c => c.suit === suit)) {
     const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
     let gaps = 0;
     for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i - 1] - 1;
     if (gaps <= jokerCount && cards.length >= 3) return true;
+  }
+
+  // Complex combos: doppia coppia, full - group by rank and check each group
+  const rankGroups = {};
+  nonJokers.forEach(c => {
+    if (!rankGroups[c.rank]) rankGroups[c.rank] = [];
+    rankGroups[c.rank].push(c);
+  });
+  const groups = Object.values(rankGroups);
+
+  // Doppia coppia extended (e.g. J J 8 8 + J = tris J + coppia 8)
+  if (groups.length === 2) {
+    const valid = groups.every(g => {
+      const suits = g.map(c => c.suit);
+      return new Set(suits).size === suits.length && g.length >= 2 && g.length <= 4;
+    });
+    if (valid && cards.length >= 4 && cards.length <= 8) return true;
+  }
+
+  // Full extended (tris + coppia + extra)
+  if (groups.length <= 2 && cards.length >= 5 && cards.length <= 8) {
+    const valid = groups.every(g => {
+      const suits = g.map(c => c.suit);
+      return new Set(suits).size === suits.length && g.length >= 2 && g.length <= 4;
+    });
+    if (valid) return true;
   }
 
   return false;

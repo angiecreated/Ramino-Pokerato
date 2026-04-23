@@ -928,7 +928,7 @@ const s = {
   insertSlot: { width: 12, height: 84, borderRadius: 4, background: 'rgba(240,192,64,0.2)', border: '2px dashed rgba(240,192,64,0.5)', cursor: 'pointer', flexShrink: 0, alignSelf: 'flex-start', marginTop: 6, transition: 'background 0.15s' },
   actions: { padding: '8px 12px 10px', background: 'rgba(0,0,0,0.5)', borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', gap: 8, flexWrap: 'wrap' },
   actionBtn: (color, textColor) => ({ flex: 1, padding: '11px 8px', borderRadius: 9, border: textColor ? 'none' : '1px solid ' + color + '44', background: textColor ? 'linear-gradient(135deg, ' + color + ', ' + color + 'cc)' : color + '18', color: textColor || color, fontWeight: 900, fontSize: 12, cursor: 'pointer', letterSpacing: 1, fontFamily: 'Georgia, serif' }),
-  chatArea: { background: 'rgba(0,0,0,0.35)', borderTop: '1px solid rgba(255,255,255,0.05)', padding: '6px 12px 8px' },
+  chatArea: { background: 'rgba(0,0,0,0.35)', borderTop: '1px solid rgba(255,255,255,0.05)', padding: '6px 12px 16px' },
   chatMessages: { overflowY: 'auto', maxHeight: 60, marginBottom: 5 },
   chatMsg: { fontSize: 11, marginBottom: 2, lineHeight: 1.4 },
   chatInput: { display: 'flex', gap: 5 },
