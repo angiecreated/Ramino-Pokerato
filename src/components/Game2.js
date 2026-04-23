@@ -626,36 +626,51 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
 
         {/* Cards overlapping - touch enabled */}
         <div style={s.handCards}>
+          {moveMode && moveSelected.length > 0 && (
+            <div
+              onClick={() => moveCardsToPosition(0)}
+              style={s.insertSlot}
+            />
+          )}
           {myHand.map((card, idx) => {
             const isSelected = !!selected.find(c => c.id === card.id);
+            const isMoveSelected = !!moveSelected.find(c => c.id === card.id);
             return (
-              <div
-                key={card.id}
-                draggable
-                onDragStart={() => touchRef.current.startIdx = idx}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={async () => {
-                  const si = touchRef.current.startIdx;
-                  if (si === null || si === idx) return;
-                  const newHand = [...myHand];
-                  const [moved] = newHand.splice(si, 1);
-                  newHand.splice(idx, 0, moved);
-                  touchRef.current.startIdx = null;
-                  await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: newHand });
-                }}
-                onTouchStart={(e) => handleTouchStart(e, idx)}
-                onTouchMove={handleTouchMove}
-                onTouchEnd={(e) => handleTouchEnd(e, idx)}
-                onClick={() => toggleSelect(card)}
-                style={{
-                  marginLeft: idx === 0 ? 0 : -24,
-                  zIndex: isSelected ? 100 : idx,
-                  position: 'relative',
-                  transition: 'margin 0.1s',
-                }}
-              >
-                <Card card={card} selected={isSelected} />
-              </div>
+              <React.Fragment key={card.id}>
+                <div
+                  draggable
+                  onDragStart={() => touchRef.current.startIdx = idx}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={async () => {
+                    const si = touchRef.current.startIdx;
+                    if (si === null || si === idx) return;
+                    const newHand = [...myHand];
+                    const [moved] = newHand.splice(si, 1);
+                    newHand.splice(idx, 0, moved);
+                    touchRef.current.startIdx = null;
+                    await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: newHand });
+                  }}
+                  onTouchStart={(e) => handleTouchStart(e, idx)}
+                  onTouchMove={handleTouchMove}
+                  onTouchEnd={(e) => handleTouchEnd(e, idx)}
+                  onClick={() => toggleSelect(card)}
+                  style={{
+                    marginLeft: idx === 0 ? 0 : (moveMode ? 4 : -24),
+                    zIndex: isMoveSelected ? 100 : isSelected ? 90 : idx,
+                    position: 'relative',
+                    transition: 'margin 0.1s',
+                    opacity: isMoveSelected ? 0.5 : 1,
+                  }}
+                >
+                  <Card card={card} selected={isMoveSelected || (!moveMode && isSelected)} />
+                </div>
+                {moveMode && moveSelected.length > 0 && !isMoveSelected && (
+                  <div
+                    onClick={() => moveCardsToPosition(idx + 1)}
+                    style={s.insertSlot}
+                  />
+                )}
+              </React.Fragment>
             );
           })}
         </div>
