@@ -27,12 +27,7 @@ export function createDeck() {
   for (let d = 0; d < 2; d++) {
     for (const suit of SUITS) {
       for (const rank of RANKS) {
-        deck.push({
-          id: rank + suit + '_' + d,
-          rank, suit,
-          value: RANK_VALUES[rank],
-          isJoker: false
-        });
+        deck.push({ id: rank + suit + '_' + d, rank, suit, value: RANK_VALUES[rank], isJoker: false });
       }
     }
     deck.push({ id: 'JOKER_' + d, rank: 'JOKER', suit: 'J', value: 25, isJoker: true });
@@ -51,8 +46,7 @@ export function shuffle(arr) {
 
 export function handPoints(cards) {
   if (!cards || cards.length === 0) return 0;
-  const nonJokers = cards.filter(c => !c.isJoker);
-  const hasOtherCards = nonJokers.length > 1 || (nonJokers.length === 1 && cards.length > 1);
+  const hasOtherCards = cards.length > 1;
   return cards.reduce((s, c) => {
     if (c.isJoker) return s + 25;
     if (c.rank === 'A') return s + (hasOtherCards ? 11 : 1);
@@ -122,17 +116,34 @@ export function isScala40(cards) {
   return cards.reduce((s, c) => s + (RANK_VALUES[c.rank] || 0), 0) >= 40;
 }
 
-export function isValidCombination(cards) {
-  if (!cards || cards.length < 2) return false;
+// For apertura validation - no jokers allowed
+export function validateApertura(cards, type) {
+  if (!cards || cards.length === 0) return false;
+  if (cards.some(c => c.isJoker)) return false;
+  switch (type) {
+    case 'coppia': return isCoppia(cards);
+    case 'doppia_coppia': return isDoppiaCoppia(cards);
+    case 'tris': return isTris(cards);
+    case 'full': return isFull(cards);
+    case 'poker': return isPoker(cards);
+    case 'scala_colore': return isScalaColore(cards);
+    case 'scala_40': return isScala40(cards);
+    default: return false;
+  }
+}
+
+// For table play after opening - only tris, poker, scala (min 3 cards) - jokers allowed
+export function isValidTableCombination(cards) {
+  if (!cards || cards.length < 3) return false;
   const nonJokers = cards.filter(c => !c.isJoker);
   const jokerCount = cards.filter(c => c.isJoker).length;
   if (nonJokers.length === 0) return false;
 
-  // Same rank (tris/poker)
+  // Tris or poker (same rank, 3-4 cards)
   const rank = nonJokers[0].rank;
-  if (nonJokers.every(c => c.rank === rank) && cards.length >= 2 && cards.length <= 4) return true;
+  if (nonJokers.every(c => c.rank === rank) && cards.length >= 3 && cards.length <= 4) return true;
 
-  // Sequential same suit (scala)
+  // Scala (sequential same suit, min 3 cards) - jokers can fill gaps
   const suit = nonJokers[0].suit;
   if (nonJokers.every(c => c.suit === suit)) {
     const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
@@ -140,6 +151,28 @@ export function isValidCombination(cards) {
     for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i - 1] - 1;
     if (gaps <= jokerCount && cards.length >= 3) return true;
   }
+
+  return false;
+}
+
+// For adding to existing table combos - jokers allowed
+export function isValidCombination(cards) {
+  if (!cards || cards.length < 2) return false;
+  const nonJokers = cards.filter(c => !c.isJoker);
+  const jokerCount = cards.filter(c => c.isJoker).length;
+  if (nonJokers.length === 0) return false;
+
+  const rank = nonJokers[0].rank;
+  if (nonJokers.every(c => c.rank === rank) && cards.length >= 2 && cards.length <= 4) return true;
+
+  const suit = nonJokers[0].suit;
+  if (nonJokers.every(c => c.suit === suit)) {
+    const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
+    let gaps = 0;
+    for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i - 1] - 1;
+    if (gaps <= jokerCount && cards.length >= 3) return true;
+  }
+
   return false;
 }
 
@@ -173,6 +206,26 @@ function getCombinations(arr, size) {
     for (const combo of rest) result.push([arr[i], ...combo]);
   }
   return result;
+}
+
+// Sort cards by suit then rank
+export function sortBySuit(cards) {
+  const suitOrder = { '\u2660': 0, '\u2665': 1, '\u2666': 2, '\u2663': 3, 'J': 4 };
+  return [...cards].sort((a, b) => {
+    const suitDiff = (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0);
+    if (suitDiff !== 0) return suitDiff;
+    return (RANK_ORDER[a.rank] || 0) - (RANK_ORDER[b.rank] || 0);
+  });
+}
+
+// Sort cards by rank then suit
+export function sortByValue(cards) {
+  const suitOrder = { '\u2660': 0, '\u2665': 1, '\u2666': 2, '\u2663': 3, 'J': 4 };
+  return [...cards].sort((a, b) => {
+    const rankDiff = (RANK_ORDER[a.rank] || 0) - (RANK_ORDER[b.rank] || 0);
+    if (rankDiff !== 0) return rankDiff;
+    return (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0);
+  });
 }
 
 export function generateRoomCode() {

@@ -3,8 +3,8 @@ import { db } from '../firebase/config';
 import { ref, onValue, update } from 'firebase/database';
 import Card from './Card';
 import {
-  APERTURE_TYPES, handPoints, isValidCombination,
-  detectApertura, canChiuderInMano, createDeck, shuffle,
+  APERTURE_TYPES, handPoints, isValidCombination, isValidTableCombination,
+  detectApertura, canChiuderInMano, createDeck, shuffle, sortBySuit, sortByValue,
 } from '../utils/gameLogic';
 
 const COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c'];
@@ -17,14 +17,26 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
   const [chatInput, setChatInput] = useState('');
   const [msg, setMsg] = useState({ text: '', type: 'error' });
   const [showScores, setShowScores] = useState(false);
-  const [dragIndex, setDragIndex] = useState(null);
-  const [dragOverIndex, setDragOverIndex] = useState(null);
+  const [discardTimer, setDiscardTimer] = useState(null);
   const chatRef = useRef(null);
+  const touchRef = useRef({ active: false, startIdx: null, startX: 0, startY: 0 });
+  const timerRef = useRef(null);
 
   useEffect(() => {
     const unsub = onValue(ref(db, 'rooms/' + roomCode), snap => {
       const data = snap.val();
-      if (data) { setRoom(data); if (data.status === 'handEnd') setShowScores(true); }
+      if (data) {
+        setRoom(data);
+        if (data.status === 'handEnd') setShowScores(true);
+        // Start discard timer when someone draws
+        if (data.discardAvailable && data.discardAvailableAt) {
+          const elapsed = Date.now() - data.discardAvailableAt;
+          const remaining = Math.max(0, 10 - Math.floor(elapsed / 1000));
+          setDiscardTimer(remaining);
+        } else {
+          setDiscardTimer(null);
+        }
+      }
     });
     return () => unsub();
   }, [roomCode]);
@@ -32,6 +44,18 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
   useEffect(() => {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
   }, [room && room.chatMessages]);
+
+  // Countdown timer for discard
+  useEffect(() => {
+    if (discardTimer === null) return;
+    if (discardTimer <= 0) {
+      // Time's up - clear discard availability
+      update(ref(db, 'rooms/' + roomCode), { discardAvailable: false, discardQueue: [] });
+      return;
+    }
+    timerRef.current = setTimeout(() => setDiscardTimer(t => t !== null ? t - 1 : null), 1000);
+    return () => clearTimeout(timerRef.current);
+  }, [discardTimer]);
 
   if (!room) return <div style={s.loading}>Caricamento...</div>;
 
@@ -44,6 +68,13 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
   const myColor = COLORS[playerOrder.indexOf(playerId)] || '#f0c040';
   const myPoints = handPoints(myHand);
   const detectedApertura = detectApertura(selected);
+  const myPlayerIndex = playerOrder.indexOf(playerId);
+
+  // Can I take the discard?
+  const canTakeDiscard = room.discardAvailable && !isMyTurn && room.topDiscard;
+  const imInQueue = room.discardQueue && room.discardQueue.includes(playerId);
+  const isFirstPlayer = myPlayerIndex === 0;
+  const isFirstManoCard = room.firstManoCard && room.manoCardTaken === false;
 
   const addLog = async (text) => {
     const logs = room.log || [];
@@ -64,6 +95,20 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     setChatInput('');
   };
 
+  // Take first mano card (only first player)
+  const takeFirstManoCard = async () => {
+    if (!isFirstPlayer || room.manoCardTaken) return;
+    const card = room.topDiscard;
+    if (!card) return;
+    await update(ref(db, 'rooms/' + roomCode), {
+      ['hands/' + playerId]: [...myHand, card],
+      topDiscard: null,
+      manoCardTaken: true,
+      drawnThisTurn: true,
+    });
+    await addLog(playerName + ' prende la prima carta.');
+  };
+
   const drawFromDeck = async () => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (room.drawnThisTurn) { showMsg('Hai gia pescato!'); return; }
@@ -79,13 +124,16 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
       deck: deck.slice(1),
       ['hands/' + playerId]: [...myHand, card],
       drawnThisTurn: true,
+      discardAvailable: true,
+      discardAvailableAt: Date.now(),
+      discardQueue: [],
     });
   };
 
   const drawFromDiscard = async () => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (room.drawnThisTurn) { showMsg('Hai gia pescato!'); return; }
-    if (!room.topDiscard) { showMsg('Nessuna carta scartata!'); return; }
+    if (!room.topDiscard) { showMsg('Nessuna carta!'); return; }
     const card = room.topDiscard;
     const newDiscard = [...(room.discardPile || [])];
     await update(ref(db, 'rooms/' + roomCode), {
@@ -93,8 +141,50 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
       discardPile: newDiscard.slice(0, -1),
       ['hands/' + playerId]: [...myHand, card],
       drawnThisTurn: true,
+      discardAvailable: false,
+      discardQueue: [],
     });
-    await addLog(me.name + ' prende la carta scartata.');
+    await addLog(playerName + ' prende la carta scartata.');
+  };
+
+  // Take discard out of turn
+  const takeDiscardOutOfTurn = async () => {
+    if (!canTakeDiscard || imInQueue) return;
+    if (!room.topDiscard) return;
+    // Check if I'm next in queue priority (by player order from current)
+    const queue = room.discardQueue || [];
+    const currentIdx = room.currentPlayerIndex % playerOrder.length;
+    // Add me to queue
+    const newQueue = [...queue, playerId];
+    await update(ref(db, 'rooms/' + roomCode), { discardQueue: newQueue });
+    showMsg('Sei in coda per lo scarto!', 'success');
+  };
+
+  // Claim discard from queue
+  const claimDiscardFromQueue = async () => {
+    if (!room.discardAvailable || !room.topDiscard) return;
+    const queue = room.discardQueue || [];
+    if (queue[0] !== playerId) { showMsg('Non e il tuo turno nella coda!'); return; }
+    const card = room.topDiscard;
+    const newDiscard = [...(room.discardPile || [])];
+    await update(ref(db, 'rooms/' + roomCode), {
+      topDiscard: newDiscard.length > 0 ? newDiscard[newDiscard.length - 1] : null,
+      discardPile: newDiscard.slice(0, -1),
+      ['hands/' + playerId]: [...myHand, card],
+      discardAvailable: false,
+      discardQueue: [],
+    });
+    await addLog(playerName + ' prende lo scarto dalla coda.');
+  };
+
+  const passDiscardQueue = async () => {
+    const queue = room.discardQueue || [];
+    if (queue[0] !== playerId) return;
+    const newQueue = queue.slice(1);
+    await update(ref(db, 'rooms/' + roomCode), {
+      discardQueue: newQueue,
+      discardAvailable: newQueue.length > 0,
+    });
   };
 
   const discardCard = async () => {
@@ -110,22 +200,21 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
       discardPile: newDiscard, topDiscard: card,
       currentPlayerIndex: (room.currentPlayerIndex + 1) % playerOrder.length,
       drawnThisTurn: false,
+      discardAvailable: false,
+      discardQueue: [],
     });
     setSelected([]);
-    await addLog(me.name + ' scarta ' + card.rank + card.suit);
+    await addLog(playerName + ' scarta ' + card.rank + card.suit);
   };
 
-  // APERTURA - solo prima volta che scendi
   const handleApertura = async () => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (!room.drawnThisTurn) { showMsg('Devi prima pescare!'); return; }
-    if (me.aperta) { showMsg('Hai gia aperto! Usa il tavolo per abbassare combinazioni.'); return; }
+    if (me.aperta) { showMsg('Hai gia aperto!'); return; }
     if (selected.length === 0) { showMsg('Seleziona le carte per aprire'); return; }
     const aperturaId = detectApertura(selected);
     if (!aperturaId) { showMsg('Combinazione non valida! Niente jolly in apertura.'); return; }
-    if (me.apertureUsate && me.apertureUsate[aperturaId]) {
-      showMsg('Apertura gia usata in una partita precedente!'); return;
-    }
+    if (me.apertureUsate && me.apertureUsate[aperturaId]) { showMsg('Apertura gia usata!'); return; }
     const newHand = myHand.filter(c => !selected.find(sc => sc.id === c.id));
     const newTable = [...(room.table || []), {
       id: Date.now().toString(), playerId, playerName: me.name,
@@ -143,21 +232,21 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     await addLog(me.name + ' apre con ' + (found ? found.label : ''));
   };
 
-  // ABBASSA COMBINAZIONE LIBERA - dopo aver gia aperto
   const handleAbbassCombinazione = async () => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (!room.drawnThisTurn) { showMsg('Devi prima pescare!'); return; }
     if (!me.aperta) { showMsg('Devi prima aprire!'); return; }
     if (selected.length === 0) { showMsg('Seleziona le carte da abbassare'); return; }
-    if (!isValidCombination(selected)) { showMsg('Combinazione non valida!'); return; }
+    if (!isValidTableCombination(selected)) {
+      showMsg('Solo tris, poker o scala (min 3 carte)!'); return;
+    }
     const newHand = myHand.filter(c => !selected.find(sc => sc.id === c.id));
     const newTable = [...(room.table || []), {
       id: Date.now().toString(), playerId, playerName: me.name,
       color: myColor, type: 'libera', cards: selected,
     }];
     await update(ref(db, 'rooms/' + roomCode), {
-      ['hands/' + playerId]: newHand,
-      table: newTable,
+      ['hands/' + playerId]: newHand, table: newTable,
     });
     setSelected([]);
     showMsg('Combinazione abbassata!', 'success');
@@ -167,7 +256,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
   const addToCombo = async (comboId) => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (!me.aperta) { showMsg('Devi prima aprire!'); return; }
-    if (selected.length === 0) { showMsg('Seleziona le carte da aggiungere'); return; }
+    if (selected.length === 0) { showMsg('Seleziona le carte'); return; }
     const combo = room.table && room.table.find(c => c.id === comboId);
     if (!combo) return;
     const newCards = [...combo.cards, ...selected];
@@ -203,13 +292,10 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (!room.drawnThisTurn) { showMsg('Devi prima pescare!'); return; }
     if (me.apertureUsate && me.apertureUsate.chiusura) { showMsg('Chiusura gia usata!'); return; }
-    if (selected.length !== myHand.length - 1) {
-      showMsg('Seleziona TUTTE le carte tranne una da scartare!'); return;
-    }
+    if (selected.length !== myHand.length - 1) { showMsg('Seleziona TUTTE le carte tranne una!'); return; }
     const cardToDiscard = myHand.find(c => !selected.find(sc => sc.id === c.id));
     if (cardToDiscard && cardToDiscard.isJoker) { showMsg('Non puoi scartare il jolly!'); return; }
     if (!canChiuderInMano(selected)) { showMsg('Le carte non formano combinazioni valide!'); return; }
-
     const newDiscard = [...(room.discardPile || [])];
     if (room.topDiscard) newDiscard.push(room.topDiscard);
     const scores = {};
@@ -228,6 +314,8 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     updates.status = 'handEnd';
     updates.handScores = scores;
     updates.handWinner = playerId;
+    updates.discardAvailable = false;
+    updates.discardQueue = [];
     await update(ref(db, 'rooms/' + roomCode), updates);
     setSelected([]);
     await addLog(me.name + ' chiude in mano!');
@@ -237,41 +325,69 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     const deck = createDeck();
     const hands = {};
     for (const pid of playerOrder) hands[pid] = deck.splice(0, 13);
+    // First card face up
+    const firstCard = deck.splice(0, 1)[0];
     const updates = {
-      status: 'playing', deck, discardPile: [], topDiscard: null, table: [],
-      currentPlayerIndex: (room.currentPlayerIndex + 1) % playerOrder.length,
+      status: 'playing', deck, discardPile: [], topDiscard: firstCard,
+      table: [], currentPlayerIndex: (room.currentPlayerIndex + 1) % playerOrder.length,
       mano: (room.mano || 1) + 1, hands, drawnThisTurn: false,
       handScores: null, handWinner: null,
+      discardAvailable: false, discardQueue: [],
+      firstManoCard: true, manoCardTaken: false,
     };
     for (const pid of playerOrder) updates['players/' + pid + '/aperta'] = false;
     await update(ref(db, 'rooms/' + roomCode), updates);
     setShowScores(false); setSelected([]);
   };
 
+  const sortHandBySuit = async () => {
+    const sorted = sortBySuit(myHand);
+    await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: sorted });
+  };
+
+  const sortHandByValue = async () => {
+    const sorted = sortByValue(myHand);
+    await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: sorted });
+  };
+
   const toggleSelect = (card) => {
     setSelected(prev => prev.find(c => c.id === card.id) ? prev.filter(c => c.id !== card.id) : [...prev, card]);
   };
 
-  const handleDragStart = (idx) => setDragIndex(idx);
-  const handleDragOver = (idx) => setDragOverIndex(idx);
-  const handleDrop = async (idx) => {
-    if (dragIndex === null || dragIndex === idx) { setDragIndex(null); setDragOverIndex(null); return; }
+  // Touch drag and drop
+  const handleTouchStart = (e, idx) => {
+    touchRef.current = { active: true, startIdx: idx, startX: e.touches[0].clientX, startY: e.touches[0].clientY };
+  };
+
+  const handleTouchMove = (e) => {
+    if (!touchRef.current.active) return;
+    e.preventDefault();
+  };
+
+  const handleTouchEnd = async (e, idx) => {
+    if (!touchRef.current.active) return;
+    const dx = Math.abs(e.changedTouches[0].clientX - touchRef.current.startX);
+    const dy = Math.abs(e.changedTouches[0].clientY - touchRef.current.startY);
+    if (dx < 5 && dy < 5) {
+      // It was a tap, not a drag
+      touchRef.current = { active: false, startIdx: null, startX: 0, startY: 0 };
+      return;
+    }
+    const startIdx = touchRef.current.startIdx;
+    touchRef.current = { active: false, startIdx: null, startX: 0, startY: 0 };
+    if (startIdx === idx || startIdx === null) return;
     const newHand = [...myHand];
-    const [moved] = newHand.splice(dragIndex, 1);
+    const [moved] = newHand.splice(startIdx, 1);
     newHand.splice(idx, 0, moved);
-    const updates = {};
-    updates['hands/' + playerId] = newHand;
-    await update(ref(db, 'rooms/' + roomCode), updates);
-    setDragIndex(null); setDragOverIndex(null);
+    await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: newHand });
   };
 
   const sortedPlayers = playerOrder.map((pid, i) => Object.assign({}, players[pid], {
-    id: pid, color: COLORS[i],
-    handCount: ((room.hands && room.hands[pid]) || []).length,
+    id: pid, color: COLORS[i], handCount: ((room.hands && room.hands[pid]) || []).length,
   }));
-
-  // Position players around table
   const otherPlayers = sortedPlayers.filter(p => p.id !== playerId);
+  const discardQueue = room.discardQueue || [];
+  const imFirstInQueue = discardQueue[0] === playerId;
 
   return (
     <div style={s.root}>
@@ -281,9 +397,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
         <span style={s.headerMano}>MANO {room.mano}</span>
         <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
           <button onClick={() => setShowAperture(!showAperture)} style={s.headerBtn}>APERTURE</button>
-          <button onClick={() => setShowChat(!showChat)} style={s.headerBtn}>
-            CHAT {room.chatMessages && room.chatMessages.length > 0 ? '(' + room.chatMessages.length + ')' : ''}
-          </button>
+          <button onClick={() => setShowChat(!showChat)} style={s.headerBtn}>CHAT</button>
         </div>
       </div>
 
@@ -336,34 +450,30 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
 
       {/* TABLE AREA */}
       <div style={s.tableArea}>
-        {/* Other players around table */}
+        {/* Other players */}
         <div style={s.otherPlayersRow}>
           {otherPlayers.map(p => (
             <div key={p.id} style={Object.assign({}, s.otherPlayerChip, {
               borderColor: p.id === currentPid ? p.color : 'rgba(255,255,255,0.08)',
-              boxShadow: p.id === currentPid ? '0 0 16px ' + p.color + '66' : 'none',
+              boxShadow: p.id === currentPid ? '0 0 14px ' + p.color + '55' : 'none',
             })}>
-              <div style={{ color: p.color, fontWeight: 900, fontSize: 12, letterSpacing: 1 }}>
+              <div style={{ color: p.color, fontWeight: 900, fontSize: 11, letterSpacing: 0.5 }}>
                 {p.name && p.name.toUpperCase()}
               </div>
-              <div style={{ display: 'flex', gap: -8, marginTop: 6 }}>
-                {Array.from({ length: Math.min(p.handCount, 8) }).map((_, i) => (
+              <div style={{ display: 'flex', marginTop: 4 }}>
+                {Array.from({ length: Math.min(p.handCount, 7) }).map((_, i) => (
                   <div key={i} style={{
-                    width: 20, height: 30, borderRadius: 3,
+                    width: 18, height: 26, borderRadius: 3,
                     background: 'linear-gradient(135deg, #0d3a5c, #071f3a)',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    marginLeft: i > 0 ? -8 : 0,
+                    border: '1px solid rgba(255,255,255,0.12)',
+                    marginLeft: i > 0 ? -7 : 0,
                     boxShadow: '1px 2px 4px rgba(0,0,0,0.5)',
                   }} />
                 ))}
-                {p.handCount > 8 && (
-                  <div style={{ color: '#4a6a7a', fontSize: 10, marginLeft: 4, alignSelf: 'center' }}>
-                    +{p.handCount - 8}
-                  </div>
-                )}
+                {p.handCount > 7 && <span style={{ color: '#4a6a7a', fontSize: 9, marginLeft: 4, alignSelf: 'center' }}>+{p.handCount - 7}</span>}
               </div>
-              <div style={{ color: '#f0c040', fontSize: 11, fontWeight: 800, marginTop: 4 }}>{p.score}pt</div>
-              {p.aperta && <div style={{ color: p.color, fontSize: 8, letterSpacing: 1 }}>APERTO</div>}
+              <div style={{ color: '#f0c040', fontSize: 10, fontWeight: 800, marginTop: 3 }}>{p.score}pt</div>
+              {p.aperta && <div style={{ color: p.color, fontSize: 8 }}>APERTO</div>}
             </div>
           ))}
         </div>
@@ -371,20 +481,18 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
         {/* Table combinations */}
         <div style={s.tableCombosArea}>
           {(!room.table || room.table.length === 0) ? (
-            <div style={{ color: '#1a3a4a', fontSize: 11, textAlign: 'center', padding: '10px 0' }}>
-              Nessuna combinazione sul tavolo
-            </div>
+            <div style={{ color: '#1a3a4a', fontSize: 10, textAlign: 'center', padding: '6px 0' }}>Tavolo vuoto</div>
           ) : (
             <div style={s.tableCombos}>
               {room.table.map(combo => (
                 <div key={combo.id} style={Object.assign({}, s.tableCombo, { borderColor: combo.color + '55' })}>
-                  <div style={{ color: combo.color, fontSize: 8, fontWeight: 800, letterSpacing: 1, marginBottom: 4 }}>
+                  <div style={{ color: combo.color, fontSize: 8, fontWeight: 800, marginBottom: 4 }}>
                     {combo.playerName && combo.playerName.toUpperCase()}
                     {combo.type !== 'libera' && ' - ' + (APERTURE_TYPES.find(a => a.id === combo.type) ? APERTURE_TYPES.find(a => a.id === combo.type).label : '')}
                   </div>
                   <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                     {combo.cards.map((card, idx) => (
-                      <div key={card.id} onClick={() => card.isJoker ? swapJoker(combo.id, idx) : null}
+                      <div key={card.id} onClick={() => card.isJoker && isMyTurn && me.aperta ? swapJoker(combo.id, idx) : null}
                         style={{ cursor: card.isJoker && isMyTurn && me.aperta ? 'pointer' : 'default' }}>
                         <Card card={card} small />
                       </div>
@@ -404,8 +512,9 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
           <div style={s.deckArea}>
             <div style={s.deckLabel}>COPERTA ({(room.deck || []).length})</div>
             <div onClick={isMyTurn && !room.drawnThisTurn ? drawFromDeck : null}
-              style={Object.assign({}, s.deckCard, { cursor: isMyTurn && !room.drawnThisTurn ? 'pointer' : 'default' })}>
-              <div style={{ fontSize: 20 }}>🂠</div>
+              style={Object.assign({}, s.deckCard, { cursor: isMyTurn && !room.drawnThisTurn ? 'pointer' : 'default',
+                boxShadow: isMyTurn && !room.drawnThisTurn ? '0 0 12px rgba(240,192,64,0.3), 2px 4px 10px rgba(0,0,0,0.5)' : '2px 4px 10px rgba(0,0,0,0.5)' })}>
+              <div style={{ fontSize: 22 }}>🂠</div>
             </div>
           </div>
           <div style={s.deckArea}>
@@ -418,43 +527,74 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
             ) : (
               <div style={s.emptyDiscard}>VUOTO</div>
             )}
+            {/* First mano card - only first player can take */}
+            {isFirstManoCard && isFirstPlayer && !room.drawnThisTurn && (
+              <button onClick={takeFirstManoCard} style={s.firstCardBtn}>PRENDI</button>
+            )}
           </div>
         </div>
       </div>
 
       {/* MY HAND */}
       <div style={s.handArea}>
+        {/* Discard notification bar - above cards */}
+        {canTakeDiscard && !imInQueue && (
+          <div style={s.discardNotif}>
+            <span style={{ color: '#c0d4e0', fontSize: 11 }}>
+              Scarto disponibile! {discardTimer !== null && discardTimer + 's'}
+            </span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={claimDiscardFromQueue} style={s.discardBtn('#2ecc71')}>PRENDO</button>
+              <button onClick={takeDiscardOutOfTurn} style={s.discardBtn('#f39c12')}>PRENOTO</button>
+            </div>
+          </div>
+        )}
+
+        {/* In queue notification */}
+        {imInQueue && canTakeDiscard && (
+          <div style={s.discardNotif}>
+            <span style={{ color: '#f39c12', fontSize: 11 }}>
+              {imFirstInQueue ? 'Tocca a te! Vuoi lo scarto?' : 'Sei in coda (' + (discardQueue.indexOf(playerId) + 1) + ')'}
+              {discardTimer !== null && ' ' + discardTimer + 's'}
+            </span>
+            {imFirstInQueue && (
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={claimDiscardFromQueue} style={s.discardBtn('#2ecc71')}>SI</button>
+                <button onClick={passDiscardQueue} style={s.discardBtn('#e74c3c')}>NO</button>
+              </div>
+            )}
+          </div>
+        )}
+
         <div style={s.handHeader}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ color: myColor, fontWeight: 900, fontSize: 13, letterSpacing: 1 }}>
               {playerName && playerName.toUpperCase()}
             </span>
-            <span style={{ color: '#4a6a7a', fontSize: 11 }}>{myHand.length} carte</span>
-            <span style={{
-              fontWeight: 900, fontSize: 13,
-              color: myPoints > 50 ? '#e74c3c' : myPoints > 25 ? '#f39c12' : '#2ecc71',
-            }}>{myPoints}PT</span>
+            <span style={{ color: '#4a6a7a', fontSize: 10 }}>{myHand.length} carte</span>
+            <span style={{ fontWeight: 900, fontSize: 12, color: myPoints > 50 ? '#e74c3c' : myPoints > 25 ? '#f39c12' : '#2ecc71' }}>
+              {myPoints}PT
+            </span>
           </div>
-          {selected.length > 0 && (
-            <button onClick={() => setSelected([])} style={s.clearBtn}>
-              x DESELEZIONA ({selected.length})
-            </button>
-          )}
+          <div style={{ display: 'flex', gap: 5 }}>
+            <button onClick={sortHandBySuit} style={s.sortBtn}>♠ SEME</button>
+            <button onClick={sortHandByValue} style={s.sortBtn}>7 VALORE</button>
+            {selected.length > 0 && (
+              <button onClick={() => setSelected([])} style={s.clearBtn}>x ({selected.length})</button>
+            )}
+          </div>
         </div>
 
         {selected.length > 0 && detectedApertura && !(me.apertureUsate && me.apertureUsate[detectedApertura]) && !me.aperta && (
-          <div style={s.aperturaHint}>
-            APERTURA RILEVATA: {APERTURE_TYPES.find(a => a.id === detectedApertura) ? APERTURE_TYPES.find(a => a.id === detectedApertura).label : ''}
+          <div style={s.hint('#9b59b6')}>
+            APERTURA: {APERTURE_TYPES.find(a => a.id === detectedApertura) ? APERTURE_TYPES.find(a => a.id === detectedApertura).label : ''}
           </div>
         )}
-
-        {selected.length > 0 && me.aperta && isValidCombination(selected) && (
-          <div style={Object.assign({}, s.aperturaHint, { background: 'rgba(52,152,219,0.15)', borderColor: 'rgba(52,152,219,0.4)', color: '#3498db' })}>
-            COMBINAZIONE VALIDA - puoi abbassarla!
-          </div>
+        {selected.length > 0 && me.aperta && isValidTableCombination(selected) && (
+          <div style={s.hint('#3498db')}>COMBINAZIONE VALIDA - puoi abbassarla!</div>
         )}
 
-        {/* Cards overlapping */}
+        {/* Cards overlapping - touch enabled */}
         <div style={s.handCards}>
           {myHand.map((card, idx) => {
             const isSelected = !!selected.find(c => c.id === card.id);
@@ -462,16 +602,25 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
               <div
                 key={card.id}
                 draggable
-                onDragStart={() => handleDragStart(idx)}
-                onDragOver={(e) => { e.preventDefault(); handleDragOver(idx); }}
-                onDrop={() => handleDrop(idx)}
-                onDragEnd={() => { setDragIndex(null); setDragOverIndex(null); }}
+                onDragStart={() => touchRef.current.startIdx = idx}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={async () => {
+                  const si = touchRef.current.startIdx;
+                  if (si === null || si === idx) return;
+                  const newHand = [...myHand];
+                  const [moved] = newHand.splice(si, 1);
+                  newHand.splice(idx, 0, moved);
+                  touchRef.current.startIdx = null;
+                  await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: newHand });
+                }}
+                onTouchStart={(e) => handleTouchStart(e, idx)}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={(e) => handleTouchEnd(e, idx)}
                 onClick={() => toggleSelect(card)}
                 style={{
                   marginLeft: idx === 0 ? 0 : -24,
                   zIndex: isSelected ? 100 : idx,
                   position: 'relative',
-                  opacity: dragIndex === idx ? 0.4 : 1,
                   transition: 'margin 0.1s',
                 }}
               >
@@ -482,7 +631,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
         </div>
 
         {/* My aperture badges */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, paddingBottom: 8 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, paddingBottom: 6 }}>
           {APERTURE_TYPES.map(a => {
             const used = me.apertureUsate && !!me.apertureUsate[a.id];
             return (
@@ -510,7 +659,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
               {!me.aperta && selected.length > 0 && detectedApertura && !(me.apertureUsate && me.apertureUsate[detectedApertura]) && (
                 <button onClick={handleApertura} style={s.actionBtn('#9b59b6', null)}>APRI</button>
               )}
-              {me.aperta && selected.length > 0 && isValidCombination(selected) && (
+              {me.aperta && selected.length > 0 && isValidTableCombination(selected) && (
                 <button onClick={handleAbbassCombinazione} style={s.actionBtn('#3498db', null)}>ABBASSA</button>
               )}
               {selected.length === myHand.length - 1 && (
@@ -525,7 +674,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
       {/* CHAT */}
       {showChat && (
         <div style={s.chatPanel}>
-          <div style={s.chatTitle}>CHAT DI GIOCO</div>
+          <div style={s.chatTitle}>CHAT</div>
           <div ref={chatRef} style={s.chatMessages}>
             {(room.chatMessages || []).map(m => (
               <div key={m.id} style={s.chatMsg}>
@@ -535,14 +684,10 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
             ))}
           </div>
           <div style={s.chatInput}>
-            <input
-              value={chatInput}
-              onChange={e => setChatInput(e.target.value)}
+            <input value={chatInput} onChange={e => setChatInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && sendChat()}
-              placeholder='Scrivi...'
-              style={s.chatInputField}
-              autoComplete='off' autoCorrect='off' spellCheck='false'
-            />
+              placeholder='Scrivi...' style={s.chatInputField}
+              autoComplete='off' autoCorrect='off' spellCheck='false' />
             <button onClick={sendChat} style={s.chatSend}>INVIA</button>
           </div>
         </div>
@@ -553,7 +698,6 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
         <div style={s.modalOverlay}>
           <div style={s.modal}>
             <div style={{ textAlign: 'center', marginBottom: 20 }}>
-              <div style={{ fontSize: 40 }}>POKERAMI</div>
               <h3 style={s.modalTitle}>
                 {players[room.handWinner] && players[room.handWinner].name && players[room.handWinner].name.toUpperCase()} CHIUDE!
               </h3>
@@ -575,9 +719,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
                 PROSSIMA MANO
               </button>
             ) : (
-              <p style={{ color: '#4a6a7a', textAlign: 'center', fontSize: 11, marginTop: 16 }}>
-                In attesa dell host...
-              </p>
+              <p style={{ color: '#4a6a7a', textAlign: 'center', fontSize: 11, marginTop: 16 }}>In attesa dell host...</p>
             )}
           </div>
         </div>
@@ -593,152 +735,47 @@ const s = {
     fontFamily: 'Georgia, serif', color: '#e0eaf4',
     display: 'flex', flexDirection: 'column', userSelect: 'none',
   },
-  loading: {
-    minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-    background: '#061a26', color: '#f0c040', fontSize: 18, letterSpacing: 3,
-  },
-  header: {
-    background: 'rgba(0,0,0,0.6)', borderBottom: '1px solid rgba(255,255,255,0.05)',
-    padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10,
-  },
+  loading: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#061a26', color: '#f0c040', fontSize: 18, letterSpacing: 3 },
+  header: { background: 'rgba(0,0,0,0.6)', borderBottom: '1px solid rgba(255,255,255,0.05)', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 },
   headerTitle: { color: '#f0c040', fontWeight: 900, fontSize: 16, letterSpacing: 4 },
   headerMano: { color: '#2a4a5a', fontSize: 11, letterSpacing: 2 },
-  headerBtn: {
-    background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
-    color: '#4a8fa6', borderRadius: 6, padding: '5px 10px', fontSize: 9,
-    cursor: 'pointer', letterSpacing: 1, fontFamily: 'Georgia, serif',
-  },
+  headerBtn: { background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#4a8fa6', borderRadius: 6, padding: '5px 10px', fontSize: 9, cursor: 'pointer', letterSpacing: 1, fontFamily: 'Georgia, serif' },
   turnBanner: { padding: '7px 14px', textAlign: 'center' },
-  msgBar: {
-    padding: '7px 14px', textAlign: 'center', fontSize: 12,
-    border: '1px solid', letterSpacing: 1, fontWeight: 700,
-  },
-  aperturePanel: {
-    background: 'rgba(0,0,0,0.4)', borderBottom: '1px solid rgba(255,255,255,0.04)',
-    padding: '8px 12px', maxHeight: 180, overflowY: 'auto',
-  },
+  msgBar: { padding: '7px 14px', textAlign: 'center', fontSize: 12, border: '1px solid', letterSpacing: 1, fontWeight: 700 },
+  aperturePanel: { background: 'rgba(0,0,0,0.4)', borderBottom: '1px solid rgba(255,255,255,0.04)', padding: '8px 12px', maxHeight: 160, overflowY: 'auto' },
   aperturePlayerRow: { display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 },
-  tableArea: {
-    background: 'linear-gradient(180deg, #0d3a4a 0%, #0a2e3a 100%)',
-    borderBottom: '2px solid rgba(10,140,180,0.2)',
-    padding: '10px 12px',
-    boxShadow: 'inset 0 -4px 20px rgba(0,0,0,0.4)',
-  },
-  otherPlayersRow: {
-    display: 'flex', justifyContent: 'center', gap: 12,
-    marginBottom: 10, flexWrap: 'wrap',
-  },
-  otherPlayerChip: {
-    background: 'rgba(0,0,0,0.35)', border: '1px solid',
-    borderRadius: 12, padding: '8px 12px', textAlign: 'center',
-    minWidth: 80, transition: 'box-shadow 0.2s',
-  },
-  tableCombosArea: { minHeight: 60, marginBottom: 8 },
-  tableCombos: { display: 'flex', flexWrap: 'wrap', gap: 8 },
-  tableCombo: {
-    background: 'rgba(0,0,0,0.3)', border: '1px solid', borderRadius: 8, padding: 7,
-  },
-  addBtn: {
-    marginTop: 5, padding: '3px 7px', borderRadius: 4,
-    background: 'rgba(240,192,64,0.1)', border: '1px solid rgba(240,192,64,0.3)',
-    color: '#f0c040', fontSize: 8, cursor: 'pointer', width: '100%', letterSpacing: 1,
-    fontFamily: 'Georgia, serif',
-  },
-  deckDiscardRow: {
-    display: 'flex', gap: 16, justifyContent: 'center', alignItems: 'flex-end',
-  },
+  tableArea: { background: 'linear-gradient(180deg, #0d3a4a 0%, #0a2e3a 100%)', borderBottom: '2px solid rgba(10,140,180,0.15)', padding: '8px 12px' },
+  otherPlayersRow: { display: 'flex', justifyContent: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' },
+  otherPlayerChip: { background: 'rgba(0,0,0,0.35)', border: '1px solid', borderRadius: 10, padding: '7px 10px', textAlign: 'center', minWidth: 75, transition: 'box-shadow 0.2s' },
+  tableCombosArea: { minHeight: 50, marginBottom: 6 },
+  tableCombos: { display: 'flex', flexWrap: 'wrap', gap: 6 },
+  tableCombo: { background: 'rgba(0,0,0,0.3)', border: '1px solid', borderRadius: 7, padding: 6 },
+  addBtn: { marginTop: 4, padding: '2px 6px', borderRadius: 4, background: 'rgba(240,192,64,0.1)', border: '1px solid rgba(240,192,64,0.3)', color: '#f0c040', fontSize: 8, cursor: 'pointer', width: '100%', letterSpacing: 1, fontFamily: 'Georgia, serif' },
+  deckDiscardRow: { display: 'flex', gap: 14, justifyContent: 'center', alignItems: 'flex-end' },
   deckArea: { textAlign: 'center' },
-  deckLabel: { color: '#2a5a6a', fontSize: 9, letterSpacing: 2, marginBottom: 4 },
-  deckCard: {
-    width: 58, height: 84, borderRadius: 7,
-    background: 'linear-gradient(135deg, #0d3a5c, #071f3a)',
-    border: '1.5px solid rgba(255,255,255,0.15)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    boxShadow: '2px 4px 10px rgba(0,0,0,0.5)',
-  },
-  emptyDiscard: {
-    width: 58, height: 84, borderRadius: 7,
-    border: '2px dashed rgba(255,255,255,0.1)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    color: '#1a3a4a', fontSize: 9, letterSpacing: 1,
-  },
-  handArea: {
-    flex: 1, background: '#051520',
-    padding: '10px 12px 0', borderTop: '2px solid rgba(10,100,140,0.3)',
-  },
-  handHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  aperturaHint: {
-    background: 'rgba(155,89,182,0.12)', border: '1px solid rgba(155,89,182,0.35)',
-    borderRadius: 5, padding: '4px 10px', color: '#9b59b6',
-    fontSize: 9, letterSpacing: 2, fontWeight: 800, marginBottom: 6,
-  },
-  handCards: {
-    display: 'flex', flexWrap: 'nowrap', overflowX: 'auto',
-    paddingBottom: 14, paddingTop: 6, minHeight: 100,
-  },
-  clearBtn: {
-    background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
-    color: '#4a6a7a', borderRadius: 5, padding: '3px 8px',
-    fontSize: 9, cursor: 'pointer', letterSpacing: 1, fontFamily: 'Georgia, serif',
-  },
-  actions: {
-    padding: '8px 12px 10px', background: 'rgba(0,0,0,0.5)',
-    borderTop: '1px solid rgba(255,255,255,0.04)',
-    display: 'flex', gap: 8, flexWrap: 'wrap',
-  },
-  actionBtn: (color, textColor) => ({
-    flex: 1, padding: '11px 8px', borderRadius: 9,
-    border: textColor ? 'none' : '1px solid ' + color + '44',
-    background: textColor ? 'linear-gradient(135deg, ' + color + ', ' + color + 'cc)' : color + '18',
-    color: textColor || color,
-    fontWeight: 900, fontSize: 12, cursor: 'pointer', letterSpacing: 1,
-    fontFamily: 'Georgia, serif',
-    boxShadow: textColor ? '0 4px 14px ' + color + '44' : 'none',
-  }),
-  chatPanel: {
-    position: 'fixed', bottom: 0, right: 0, width: '280px',
-    background: 'linear-gradient(180deg, #061a26, #0a2e3d)',
-    border: '1px solid rgba(240,192,64,0.2)',
-    borderRadius: '12px 12px 0 0',
-    zIndex: 150, maxHeight: '60vh', display: 'flex', flexDirection: 'column',
-  },
-  chatTitle: {
-    color: '#f0c040', fontWeight: 900, fontSize: 11, letterSpacing: 3,
-    padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.05)',
-  },
-  chatMessages: {
-    flex: 1, overflowY: 'auto', padding: '8px 12px', minHeight: 100, maxHeight: 200,
-  },
-  chatMsg: { fontSize: 12, marginBottom: 6, lineHeight: 1.4 },
-  chatInput: {
-    display: 'flex', gap: 6, padding: '8px 10px',
-    borderTop: '1px solid rgba(255,255,255,0.05)',
-  },
-  chatInputField: {
-    flex: 1, background: 'rgba(255,255,255,0.07)',
-    border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8,
-    padding: '7px 10px', color: '#fff', fontSize: 13, outline: 'none',
-    fontFamily: 'Georgia, serif',
-  },
-  chatSend: {
-    background: 'linear-gradient(135deg, #f0c040, #c8860a)',
-    border: 'none', borderRadius: 8, color: '#061a26',
-    fontWeight: 900, fontSize: 10, padding: '7px 10px', cursor: 'pointer',
-    letterSpacing: 1, fontFamily: 'Georgia, serif',
-  },
-  modalOverlay: {
-    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    zIndex: 200, padding: 16, fontFamily: 'Georgia, serif',
-  },
-  modal: {
-    background: 'linear-gradient(135deg, #061a26, #0a2e3d)',
-    border: '1px solid rgba(240,192,64,0.2)', borderRadius: 20, padding: 24,
-    width: '100%', maxWidth: 360, maxHeight: '85vh', overflowY: 'auto',
-  },
+  deckLabel: { color: '#2a5a6a', fontSize: 9, letterSpacing: 1, marginBottom: 4 },
+  deckCard: { width: 58, height: 84, borderRadius: 7, background: 'linear-gradient(135deg, #0d3a5c, #071f3a)', border: '1.5px solid rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  emptyDiscard: { width: 58, height: 84, borderRadius: 7, border: '2px dashed rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1a3a4a', fontSize: 9 },
+  firstCardBtn: { marginTop: 4, padding: '4px 8px', borderRadius: 5, background: 'rgba(240,192,64,0.15)', border: '1px solid rgba(240,192,64,0.4)', color: '#f0c040', fontSize: 9, cursor: 'pointer', width: '100%', fontFamily: 'Georgia, serif', fontWeight: 800 },
+  handArea: { flex: 1, background: '#051520', padding: '8px 12px 0', borderTop: '2px solid rgba(10,100,140,0.25)' },
+  discardNotif: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, padding: '6px 10px', marginBottom: 6 },
+  discardBtn: (color) => ({ padding: '4px 10px', borderRadius: 6, border: 'none', background: color + '22', color: color, fontWeight: 800, fontSize: 10, cursor: 'pointer', letterSpacing: 1, fontFamily: 'Georgia, serif', border: '1px solid ' + color + '44' }),
+  handHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 },
+  hint: (color) => ({ background: color + '12', border: '1px solid ' + color + '35', borderRadius: 5, padding: '3px 8px', color: color, fontSize: 9, letterSpacing: 1, fontWeight: 800, marginBottom: 5 }),
+  handCards: { display: 'flex', flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: 12, paddingTop: 4, minHeight: 96 },
+  sortBtn: { background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#4a8fa6', borderRadius: 5, padding: '3px 7px', fontSize: 8, cursor: 'pointer', letterSpacing: 0.5, fontFamily: 'Georgia, serif' },
+  clearBtn: { background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: '#4a6a7a', borderRadius: 5, padding: '3px 7px', fontSize: 8, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  actions: { padding: '8px 12px 10px', background: 'rgba(0,0,0,0.5)', borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', gap: 8, flexWrap: 'wrap' },
+  actionBtn: (color, textColor) => ({ flex: 1, padding: '11px 8px', borderRadius: 9, border: textColor ? 'none' : '1px solid ' + color + '44', background: textColor ? 'linear-gradient(135deg, ' + color + ', ' + color + 'cc)' : color + '18', color: textColor || color, fontWeight: 900, fontSize: 12, cursor: 'pointer', letterSpacing: 1, fontFamily: 'Georgia, serif' }),
+  chatPanel: { position: 'fixed', bottom: 0, right: 0, width: '260px', background: 'linear-gradient(180deg, #061a26, #0a2e3d)', border: '1px solid rgba(240,192,64,0.2)', borderRadius: '10px 10px 0 0', zIndex: 150, display: 'flex', flexDirection: 'column' },
+  chatTitle: { color: '#f0c040', fontWeight: 900, fontSize: 11, letterSpacing: 3, padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)' },
+  chatMessages: { overflowY: 'auto', padding: '6px 10px', minHeight: 80, maxHeight: 180 },
+  chatMsg: { fontSize: 11, marginBottom: 4, lineHeight: 1.4 },
+  chatInput: { display: 'flex', gap: 5, padding: '6px 8px', borderTop: '1px solid rgba(255,255,255,0.05)' },
+  chatInputField: { flex: 1, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 7, padding: '6px 8px', color: '#fff', fontSize: 12, outline: 'none', fontFamily: 'Georgia, serif' },
+  chatSend: { background: 'linear-gradient(135deg, #f0c040, #c8860a)', border: 'none', borderRadius: 7, color: '#061a26', fontWeight: 900, fontSize: 9, padding: '6px 8px', cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: 16, fontFamily: 'Georgia, serif' },
+  modal: { background: 'linear-gradient(135deg, #061a26, #0a2e3d)', border: '1px solid rgba(240,192,64,0.2)', borderRadius: 20, padding: 24, width: '100%', maxWidth: 360, maxHeight: '85vh', overflowY: 'auto' },
   modalTitle: { color: '#f0c040', margin: '8px 0 4px', fontSize: 18, letterSpacing: 3 },
-  scoreRow: {
-    display: 'flex', justifyContent: 'space-between', padding: '8px 0',
-    borderBottom: '1px solid rgba(255,255,255,0.05)', letterSpacing: 1,
-  },
+  scoreRow: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,0.05)', letterSpacing: 1 },
 };
