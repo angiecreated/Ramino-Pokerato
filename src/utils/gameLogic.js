@@ -211,10 +211,15 @@ export function isValidTableCombination(cards) {
   const nonJokers = cards.filter(c => !c.isJoker);
   const jokerCount = cards.filter(c => c.isJoker).length;
   if (nonJokers.length === 0) return false;
+  if (jokerCount > 1) return false;
 
-  // Tris or poker (same rank, 3-4 cards)
+  // Tris or poker (same rank, 3-4 cards) - no duplicate suits allowed
   const rank = nonJokers[0].rank;
-  if (nonJokers.every(c => c.rank === rank) && cards.length >= 3 && cards.length <= 4) return true;
+  if (nonJokers.every(c => c.rank === rank) && cards.length >= 3 && cards.length <= 4) {
+    const suits = nonJokers.map(c => c.suit);
+    const uniqueSuits = new Set(suits);
+    if (uniqueSuits.size === suits.length) return true; // no duplicate suits
+  }
 
   // Scala (sequential same suit, min 3 cards) - jokers can fill gaps
   const suit = nonJokers[0].suit;
@@ -234,10 +239,16 @@ export function isValidCombination(cards) {
   const nonJokers = cards.filter(c => !c.isJoker);
   const jokerCount = cards.filter(c => c.isJoker).length;
   if (nonJokers.length === 0) return false;
+  if (jokerCount > 1) return false;
 
+  // Tris/poker - no duplicate suits
   const rank = nonJokers[0].rank;
-  if (nonJokers.every(c => c.rank === rank) && cards.length >= 2 && cards.length <= 4) return true;
+  if (nonJokers.every(c => c.rank === rank) && cards.length >= 2 && cards.length <= 4) {
+    const suits = nonJokers.map(c => c.suit);
+    if (new Set(suits).size === suits.length) return true;
+  }
 
+  // Scala
   const suit = nonJokers[0].suit;
   if (nonJokers.every(c => c.suit === suit)) {
     const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);

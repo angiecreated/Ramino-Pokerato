@@ -269,11 +269,17 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
       }
 
       // Auto-declare for scala based on selection order
-      const declaration = isTrisLike
-        ? (declaredSuit ? selected.find(c => !c.isJoker).rank + declaredSuit : null)
-        : getJokerDeclaration(selectionOrder, jokerCard);
+      let declaration = null;
+      if (isTrisLike) {
+        if (declaredSuit) {
+          const nonJokerCard = selected.find(c => !c.isJoker);
+          declaration = nonJokerCard.rank + declaredSuit;
+        }
+      } else {
+        declaration = getJokerDeclaration(selectionOrder, jokerCard);
+      }
 
-      if (declaration) {
+      if (declaration && typeof declaration === 'string') {
         cardsToPlay = cardsToPlay.map(c => c.isJoker ? Object.assign({}, c, { declaredAs: declaration }) : c);
       }
     }
@@ -298,12 +304,44 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     if (selected.length === 0) { showMsg('Seleziona le carte'); return; }
     const combo = room.table && room.table.find(c => c.id === comboId);
     if (!combo) return;
-    // Check single joker rule
     const addingJoker = selected.some(c => c.isJoker);
     if (addingJoker && comboHasJoker(combo)) {
       showMsg('Una combinazione puo avere solo un jolly!'); return;
     }
-    const newCards = [...combo.cards, ...selected];
+    let cardsToAdd = [...selected];
+    if (addingJoker) {
+      const jokerCard = selected.find(c => c.isJoker);
+      const allCards = [...combo.cards, ...selected];
+      const nonJokers = allCards.filter(c => !c.isJoker);
+      const isTrisLike = nonJokers.every(c => c.rank === nonJokers[0].rank);
+      if (isTrisLike) {
+        const missingSuits = getMissingTrisSuits(allCards.filter(c => !c.isJoker));
+        if (missingSuits.length > 1) {
+          setJokerModal({ type: 'tris', suits: missingSuits, onConfirm: async (suit) => {
+            setJokerModal(null);
+            const declaration = nonJokers[0].rank + suit;
+            const declaredCards = cardsToAdd.map(c => c.isJoker ? Object.assign({}, c, { declaredAs: declaration }) : c);
+            const newCards = [...combo.cards, ...declaredCards];
+            await update(ref(db, 'rooms/' + roomCode), {
+              ['hands/' + playerId]: myHand.filter(c => !selected.find(sc => sc.id === c.id)),
+              table: room.table.map(c => c.id === comboId ? Object.assign({}, c, { cards: newCards }) : c),
+            });
+            setSelected([]);
+            await addLog(me.name + ' aggiunge carte al tavolo.');
+          }});
+          return;
+        } else if (missingSuits.length === 1) {
+          const declaration = nonJokers[0].rank + missingSuits[0];
+          cardsToAdd = cardsToAdd.map(c => c.isJoker ? Object.assign({}, c, { declaredAs: declaration }) : c);
+        }
+      } else {
+        const declaration = getJokerDeclaration(selectionOrder, jokerCard);
+        if (declaration && typeof declaration === 'string') {
+          cardsToAdd = cardsToAdd.map(c => c.isJoker ? Object.assign({}, c, { declaredAs: declaration }) : c);
+        }
+      }
+    }
+    const newCards = [...combo.cards, ...cardsToAdd];
     if (!isValidCombination(newCards)) { showMsg('Combinazione non valida!'); return; }
     await update(ref(db, 'rooms/' + roomCode), {
       ['hands/' + playerId]: myHand.filter(c => !selected.find(sc => sc.id === c.id)),
