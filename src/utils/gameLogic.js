@@ -11,9 +11,11 @@ export const RANK_ORDER = {
   8: 8, 9: 9, 10: 10, J: 11, Q: 12, K: 13
 };
 
+export const VESTITE = ['A', 'K', 'Q', 'J'];
+
 export const APERTURE_TYPES = [
-  { id: 'coppia', label: 'COPPIA', desc: '2 carte dello stesso valore' },
-  { id: 'doppia_coppia', label: 'DOPPIA COPPIA', desc: '2 coppie' },
+  { id: 'coppia', label: 'COPPIA', desc: 'Coppia vestita (A K Q J)' },
+  { id: 'doppia_coppia', label: 'DOPPIA COPPIA', desc: 'Due coppie, almeno una vestita' },
   { id: 'tris', label: 'TRIS', desc: '3 carte dello stesso valore' },
   { id: 'full', label: 'FULL', desc: 'Tris + Coppia' },
   { id: 'poker', label: 'POKER', desc: '4 carte dello stesso valore' },
@@ -68,7 +70,9 @@ export function detectApertura(cards) {
 }
 
 export function isCoppia(cards) {
-  return cards.length === 2 && cards[0].rank === cards[1].rank;
+  if (cards.length !== 2) return false;
+  if (cards[0].rank !== cards[1].rank) return false;
+  return VESTITE.includes(cards[0].rank);
 }
 
 export function isDoppiaCoppia(cards) {
@@ -76,7 +80,11 @@ export function isDoppiaCoppia(cards) {
   const ranks = cards.map(c => c.rank);
   const unique = [...new Set(ranks)];
   if (unique.length !== 2) return false;
-  return ranks.filter(r => r === unique[0]).length === 2 && ranks.filter(r => r === unique[1]).length === 2;
+  const count0 = ranks.filter(r => r === unique[0]).length;
+  const count1 = ranks.filter(r => r === unique[1]).length;
+  if (count0 !== 2 || count1 !== 2) return false;
+  // At least one pair must be vestita
+  return VESTITE.includes(unique[0]) || VESTITE.includes(unique[1]);
 }
 
 export function isTris(cards) {

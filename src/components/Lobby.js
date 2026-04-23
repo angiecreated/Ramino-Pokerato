@@ -59,10 +59,13 @@ export default function Lobby({ onGameStart }) {
     const deck = createDeck();
     const hands = {};
     playerIds.forEach(pid => { hands[pid] = deck.splice(0, 13); });
+    // First card face up - only first player can take it
+    const firstCard = deck.splice(0, 1)[0];
     await update(ref(db, 'rooms/' + code), {
-      status: 'playing', deck, discardPile: [], topDiscard: null,
+      status: 'playing', deck, discardPile: [], topDiscard: firstCard,
       table: [], currentPlayerIndex: 0, playerOrder: playerIds,
       mano: 1, hands, drawnThisTurn: false, chatMessages: [],
+      firstManoCard: true, manoCardTaken: false,
       log: ['Partita iniziata!'],
     });
   };
