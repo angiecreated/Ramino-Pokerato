@@ -18,6 +18,8 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
   const [msg, setMsg] = useState({ text: '', type: 'error' });
   const [showScores, setShowScores] = useState(false);
   const [discardTimer, setDiscardTimer] = useState(null);
+  const [moveMode, setMoveMode] = useState(false);
+  const [moveSelected, setMoveSelected] = useState([]);
   const chatRef = useRef(null);
   const touchRef = useRef({ active: false, startIdx: null, startX: 0, startY: 0 });
   const timerRef = useRef(null);
@@ -351,7 +353,23 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
   };
 
   const toggleSelect = (card) => {
-    setSelected(prev => prev.find(c => c.id === card.id) ? prev.filter(c => c.id !== card.id) : [...prev, card]);
+    if (moveMode) {
+      // In move mode, select cards to move
+      setMoveSelected(prev => prev.find(c => c.id === card.id) ? prev.filter(c => c.id !== card.id) : [...prev, card]);
+    } else {
+      setSelected(prev => prev.find(c => c.id === card.id) ? prev.filter(c => c.id !== card.id) : [...prev, card]);
+    }
+  };
+
+  const moveCardsToPosition = async (targetIdx) => {
+    if (!moveMode || moveSelected.length === 0) return;
+    // Remove selected cards from hand
+    const remaining = myHand.filter(c => !moveSelected.find(m => m.id === c.id));
+    // Insert at target position
+    remaining.splice(targetIdx, 0, ...moveSelected);
+    await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: remaining });
+    setMoveSelected([]);
+    setMoveMode(false);
   };
 
   // Touch drag and drop
@@ -579,13 +597,25 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
           <div style={{ display: 'flex', gap: 5 }}>
             <button onClick={sortHandBySuit} style={s.sortBtn}>♠ SEME</button>
             <button onClick={sortHandByValue} style={s.sortBtn}>7 VALORE</button>
-            {selected.length > 0 && (
+            <button onClick={() => { setMoveMode(!moveMode); setMoveSelected([]); setSelected([]); }}
+              style={Object.assign({}, s.sortBtn, { color: moveMode ? '#f0c040' : '#4a8fa6', border: '1px solid ' + (moveMode ? 'rgba(240,192,64,0.4)' : 'rgba(255,255,255,0.1)') })}>
+              {moveMode ? 'ANNULLA' : 'SPOSTA'}
+            </button>
+            {!moveMode && selected.length > 0 && (
               <button onClick={() => setSelected([])} style={s.clearBtn}>x ({selected.length})</button>
+            )}
+            {moveMode && moveSelected.length > 0 && (
+              <button onClick={() => setMoveSelected([])} style={s.clearBtn}>x ({moveSelected.length})</button>
             )}
           </div>
         </div>
 
-        {selected.length > 0 && detectedApertura && !(me.apertureUsate && me.apertureUsate[detectedApertura]) && !me.aperta && (
+        {moveMode && (
+          <div style={s.hint('#f39c12')}>
+            {moveSelected.length === 0 ? 'TOCCA LE CARTE DA SPOSTARE' : 'TOCCA LA POSIZIONE DOVE INSERIRLE (' + moveSelected.length + ' selezionate)'}
+          </div>
+        )}
+        {!moveMode && selected.length > 0 && detectedApertura && !(me.apertureUsate && me.apertureUsate[detectedApertura]) && !me.aperta && (
           <div style={s.hint('#9b59b6')}>
             APERTURA: {APERTURE_TYPES.find(a => a.id === detectedApertura) ? APERTURE_TYPES.find(a => a.id === detectedApertura).label : ''}
           </div>
