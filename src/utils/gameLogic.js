@@ -69,6 +69,71 @@ export function detectApertura(cards) {
   return null;
 }
 
+// Returns true if combination already has a joker
+export function comboHasJoker(combo) {
+  if (!combo || !combo.cards) return false;
+  return combo.cards.some(c => c.isJoker);
+}
+
+// For tris: determine which suits are missing to declare joker
+export function getMissingTrisSuits(cards) {
+  const nonJokers = cards.filter(c => !c.isJoker);
+  if (nonJokers.length === 0) return [];
+  const rank = nonJokers[0].rank;
+  const allSuits = ['♠', '♥', '♦', '♣'];
+  const usedSuits = nonJokers.map(c => c.suit);
+  return allSuits.filter(s => !usedSuits.includes(s));
+}
+
+// Determine joker declaration based on selection order for scala
+// selectionOrder: array of cards in the order they were selected
+export function getJokerDeclaration(selectionOrder, jokerCard) {
+  if (!jokerCard || !jokerCard.isJoker) return null;
+  const nonJokers = selectionOrder.filter(c => !c.isJoker);
+  if (nonJokers.length === 0) return null;
+
+  const jokerIdx = selectionOrder.indexOf(jokerCard);
+  const beforeJoker = selectionOrder.slice(0, jokerIdx).filter(c => !c.isJoker);
+  const afterJoker = selectionOrder.slice(jokerIdx + 1).filter(c => !c.isJoker);
+
+  // If joker is in the middle, it fills the gap
+  if (beforeJoker.length > 0 && afterJoker.length > 0) {
+    const suit = nonJokers[0].suit;
+    const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
+    // Find gap
+    for (let i = 1; i < orders.length; i++) {
+      if (orders[i] - orders[i-1] === 2) {
+        const missingOrder = orders[i-1] + 1;
+        const rankEntry = Object.entries(RANK_ORDER).find(([r, o]) => o === missingOrder);
+        if (rankEntry) return rankEntry[0] + suit;
+      }
+    }
+    return null;
+  }
+
+  // Joker at start - it comes before the first card
+  if (afterJoker.length > 0 && beforeJoker.length === 0) {
+    const suit = afterJoker[0].suit;
+    const firstOrder = RANK_ORDER[afterJoker[0].rank];
+    if (firstOrder > 1) {
+      const rankEntry = Object.entries(RANK_ORDER).find(([r, o]) => o === firstOrder - 1);
+      if (rankEntry) return rankEntry[0] + suit;
+    }
+  }
+
+  // Joker at end - it comes after the last card
+  if (beforeJoker.length > 0 && afterJoker.length === 0) {
+    const suit = beforeJoker[beforeJoker.length - 1].suit;
+    const lastOrder = RANK_ORDER[beforeJoker[beforeJoker.length - 1].rank];
+    if (lastOrder < 13) {
+      const rankEntry = Object.entries(RANK_ORDER).find(([r, o]) => o === lastOrder + 1);
+      if (rankEntry) return rankEntry[0] + suit;
+    }
+  }
+
+  return null;
+}
+
 export function isCoppia(cards) {
   if (cards.length !== 2) return false;
   if (cards[0].rank !== cards[1].rank) return false;

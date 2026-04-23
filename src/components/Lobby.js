@@ -78,7 +78,8 @@ export default function Lobby({ onGameStart }) {
     <div style={s.screen}>
       <div style={s.hero}>
         <h1 style={s.title}>POKERAMI</h1>
-        <p style={s.subtitle}>LA VARIANTE PAZZA</p>
+        <p style={s.subtitle2}>RAMINO POKERATO</p>
+        <p style={s.subtitle}>La variante pazza</p>
       </div>
 
       {!mode ? (
@@ -134,6 +135,7 @@ function WaitingRoom({ roomCode, playerId, onStart }) {
     <div style={s.screen}>
       <div style={s.hero}>
         <h1 style={s.title}>POKERAMI</h1>
+        <p style={s.subtitle2}>RAMINO POKERATO</p>
       </div>
       <div style={s.roomCodeBox}>
         <div style={s.roomCodeLabel}>CODICE STANZA</div>
@@ -176,7 +178,8 @@ const s = {
     WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
     fontFamily: 'Georgia, serif',
   },
-  subtitle: { color: '#4a8fa6', marginTop: 8, fontSize: 12, letterSpacing: 6, fontFamily: 'Georgia, serif' },
+  subtitle2: { color: '#c0a030', marginTop: 6, fontSize: 13, letterSpacing: 4, fontFamily: 'Georgia, serif', fontWeight: 700 },
+  subtitle: { color: '#4a8fa6', marginTop: 4, fontSize: 11, letterSpacing: 4, fontFamily: 'Georgia, serif' },
   btnGroup: { display: 'flex', flexDirection: 'column', gap: 14, width: '100%', maxWidth: 340 },
   btnPrimary: {
     padding: '16px 28px', borderRadius: 12, border: 'none',

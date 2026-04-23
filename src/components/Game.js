@@ -5,6 +5,7 @@ import Card from './Card';
 import {
   APERTURE_TYPES, handPoints, isValidCombination, isValidTableCombination,
   detectApertura, canChiuderInMano, createDeck, shuffle, sortBySuit, sortByValue,
+  comboHasJoker, getMissingTrisSuits, getJokerDeclaration,
 } from '../utils/gameLogic';
 
 const COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c'];
@@ -20,6 +21,8 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
   const [discardTimer, setDiscardTimer] = useState(null);
   const [moveMode, setMoveMode] = useState(false);
   const [moveSelected, setMoveSelected] = useState([]);
+  const [selectionOrder, setSelectionOrder] = useState([]);
+  const [jokerModal, setJokerModal] = useState(null);
   const chatRef = useRef(null);
   const touchRef = useRef({ active: false, startIdx: null, startX: 0, startY: 0 });
   const timerRef = useRef(null);
@@ -234,23 +237,57 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     await addLog(me.name + ' apre con ' + (found ? found.label : ''));
   };
 
-  const handleAbbassCombinazione = async () => {
+  const handleAbbassCombinazione = async (declaredSuit) => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (!room.drawnThisTurn) { showMsg('Devi prima pescare!'); return; }
     if (!me.aperta) { showMsg('Devi prima aprire!'); return; }
     if (selected.length === 0) { showMsg('Seleziona le carte da abbassare'); return; }
+
+    const jokerCount = selected.filter(c => c.isJoker).length;
+    if (jokerCount > 1) { showMsg('Una combinazione puo avere solo un jolly!'); return; }
+
     if (!isValidTableCombination(selected)) {
       showMsg('Solo tris, poker o scala (min 3 carte)!'); return;
     }
+
+    // Handle joker declaration
+    let cardsToPlay = [...selected];
+    if (jokerCount === 1) {
+      const jokerCard = selected.find(c => c.isJoker);
+      const isTrisLike = selected.filter(c => !c.isJoker).every(c => c.rank === selected.find(nc => !nc.isJoker).rank);
+
+      if (isTrisLike && !declaredSuit) {
+        // Need to declare suit for tris
+        const missingSuits = getMissingTrisSuits(selected);
+        if (missingSuits.length > 1) {
+          setJokerModal({ type: 'tris', suits: missingSuits, onConfirm: (suit) => {
+            setJokerModal(null);
+            handleAbbassCombinazione(suit);
+          }});
+          return;
+        }
+      }
+
+      // Auto-declare for scala based on selection order
+      const declaration = isTrisLike
+        ? (declaredSuit ? selected.find(c => !c.isJoker).rank + declaredSuit : null)
+        : getJokerDeclaration(selectionOrder, jokerCard);
+
+      if (declaration) {
+        cardsToPlay = cardsToPlay.map(c => c.isJoker ? Object.assign({}, c, { declaredAs: declaration }) : c);
+      }
+    }
+
     const newHand = myHand.filter(c => !selected.find(sc => sc.id === c.id));
     const newTable = [...(room.table || []), {
       id: Date.now().toString(), playerId, playerName: me.name,
-      color: myColor, type: 'libera', cards: selected,
+      color: myColor, type: 'libera', cards: cardsToPlay,
     }];
     await update(ref(db, 'rooms/' + roomCode), {
       ['hands/' + playerId]: newHand, table: newTable,
     });
     setSelected([]);
+    setSelectionOrder([]);
     showMsg('Combinazione abbassata!', 'success');
     await addLog(me.name + ' abbassa una combinazione.');
   };
@@ -261,6 +298,11 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     if (selected.length === 0) { showMsg('Seleziona le carte'); return; }
     const combo = room.table && room.table.find(c => c.id === comboId);
     if (!combo) return;
+    // Check single joker rule
+    const addingJoker = selected.some(c => c.isJoker);
+    if (addingJoker && comboHasJoker(combo)) {
+      showMsg('Una combinazione puo avere solo un jolly!'); return;
+    }
     const newCards = [...combo.cards, ...selected];
     if (!isValidCombination(newCards)) { showMsg('Combinazione non valida!'); return; }
     await update(ref(db, 'rooms/' + roomCode), {
@@ -354,10 +396,17 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
 
   const toggleSelect = (card) => {
     if (moveMode) {
-      // In move mode, select cards to move
       setMoveSelected(prev => prev.find(c => c.id === card.id) ? prev.filter(c => c.id !== card.id) : [...prev, card]);
     } else {
-      setSelected(prev => prev.find(c => c.id === card.id) ? prev.filter(c => c.id !== card.id) : [...prev, card]);
+      setSelected(prev => {
+        if (prev.find(c => c.id === card.id)) {
+          setSelectionOrder(o => o.filter(c => c.id !== card.id));
+          return prev.filter(c => c.id !== card.id);
+        } else {
+          setSelectionOrder(o => [...o, card]);
+          return [...prev, card];
+        }
+      });
     }
   };
 
@@ -415,7 +464,6 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
         <span style={s.headerMano}>MANO {room.mano}</span>
         <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
           <button onClick={() => setShowAperture(!showAperture)} style={s.headerBtn}>APERTURE</button>
-          <button onClick={() => setShowChat(!showChat)} style={s.headerBtn}>CHAT</button>
         </div>
       </div>
 
@@ -559,12 +607,16 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
         {canTakeDiscard && !imInQueue && (
           <div style={s.discardNotif}>
             <span style={{ color: '#c0d4e0', fontSize: 11 }}>
-              Scarto disponibile! {discardTimer !== null && discardTimer + 's'}
+              {playerOrder.length === 2
+                ? 'Puoi prendere lo scarto al tuo turno'
+                : 'Scarto disponibile! ' + (discardTimer !== null ? discardTimer + 's' : '')}
             </span>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button onClick={claimDiscardFromQueue} style={s.discardBtn('#2ecc71')}>PRENDO</button>
-              <button onClick={takeDiscardOutOfTurn} style={s.discardBtn('#f39c12')}>PRENOTO</button>
-            </div>
+            {playerOrder.length > 2 && (
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={claimDiscardFromQueue} style={s.discardBtn('#2ecc71')}>PRENDO</button>
+                <button onClick={takeDiscardOutOfTurn} style={s.discardBtn('#f39c12')}>PRENOTO</button>
+              </div>
+            )}
           </div>
         )}
 
@@ -716,24 +768,49 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
         </div>
       )}
 
-      {/* CHAT */}
-      {showChat && (
-        <div style={s.chatPanel}>
-          <div style={s.chatTitle}>CHAT</div>
-          <div ref={chatRef} style={s.chatMessages}>
-            {(room.chatMessages || []).map(m => (
-              <div key={m.id} style={s.chatMsg}>
-                <span style={{ color: '#f0c040', fontWeight: 800 }}>{m.name}: </span>
-                <span style={{ color: '#c0d4e0' }}>{m.text}</span>
-              </div>
-            ))}
-          </div>
-          <div style={s.chatInput}>
-            <input value={chatInput} onChange={e => setChatInput(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && sendChat()}
-              placeholder='Scrivi...' style={s.chatInputField}
-              autoComplete='off' autoCorrect='off' spellCheck='false' />
-            <button onClick={sendChat} style={s.chatSend}>INVIA</button>
+      {/* CHAT - always visible below hand */}
+      <div style={s.chatArea}>
+        <div ref={chatRef} style={s.chatMessages}>
+          {(room.chatMessages || []).length === 0 ? (
+            <div style={{ color: '#1a3a4a', fontSize: 10, padding: '4px 0' }}>Nessun messaggio</div>
+          ) : (room.chatMessages || []).slice(-5).map(m => (
+            <div key={m.id} style={s.chatMsg}>
+              <span style={{ color: '#f0c040', fontWeight: 800 }}>{m.name}: </span>
+              <span style={{ color: '#c0d4e0' }}>{m.text}</span>
+            </div>
+          ))}
+        </div>
+        <div style={s.chatInput}>
+          <input value={chatInput} onChange={e => setChatInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && sendChat()}
+            placeholder='Scrivi nella chat...' style={s.chatInputField}
+            autoComplete='off' autoCorrect='off' spellCheck='false' />
+          <button onClick={sendChat} style={s.chatSend}>INVIA</button>
+        </div>
+      </div>
+
+      {/* JOKER DECLARATION MODAL */}
+      {jokerModal && (
+        <div style={s.modalOverlay}>
+          <div style={Object.assign({}, s.modal, { maxWidth: 300, textAlign: 'center' })}>
+            <h3 style={{ color: '#f0c040', margin: '0 0 8px', fontSize: 16, letterSpacing: 2 }}>DICHIARA IL JOLLY</h3>
+            <p style={{ color: '#4a6a7a', fontSize: 12, marginBottom: 16 }}>Quale seme rappresenta il jolly?</p>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap' }}>
+              {jokerModal.suits.map(suit => (
+                <button key={suit} onClick={() => jokerModal.onConfirm(suit)} style={{
+                  padding: '12px 16px', borderRadius: 10, border: 'none',
+                  background: (suit === '♥' || suit === '♦') ? 'rgba(192,57,43,0.2)' : 'rgba(26,26,46,0.5)',
+                  color: (suit === '♥' || suit === '♦') ? '#e74c3c' : '#e0eaf4',
+                  fontSize: 28, cursor: 'pointer',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                }}>
+                  {suit}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setJokerModal(null)} style={{ marginTop: 16, background: 'transparent', border: 'none', color: '#4a6a7a', cursor: 'pointer', fontSize: 12, fontFamily: 'Georgia, serif' }}>
+              ANNULLA
+            </button>
           </div>
         </div>
       )}
@@ -813,13 +890,12 @@ const s = {
   insertSlot: { width: 12, height: 84, borderRadius: 4, background: 'rgba(240,192,64,0.2)', border: '2px dashed rgba(240,192,64,0.5)', cursor: 'pointer', flexShrink: 0, alignSelf: 'flex-start', marginTop: 6, transition: 'background 0.15s' },
   actions: { padding: '8px 12px 10px', background: 'rgba(0,0,0,0.5)', borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', gap: 8, flexWrap: 'wrap' },
   actionBtn: (color, textColor) => ({ flex: 1, padding: '11px 8px', borderRadius: 9, border: textColor ? 'none' : '1px solid ' + color + '44', background: textColor ? 'linear-gradient(135deg, ' + color + ', ' + color + 'cc)' : color + '18', color: textColor || color, fontWeight: 900, fontSize: 12, cursor: 'pointer', letterSpacing: 1, fontFamily: 'Georgia, serif' }),
-  chatPanel: { position: 'fixed', bottom: 0, right: 0, width: '260px', background: 'linear-gradient(180deg, #061a26, #0a2e3d)', border: '1px solid rgba(240,192,64,0.2)', borderRadius: '10px 10px 0 0', zIndex: 150, display: 'flex', flexDirection: 'column' },
-  chatTitle: { color: '#f0c040', fontWeight: 900, fontSize: 11, letterSpacing: 3, padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)' },
-  chatMessages: { overflowY: 'auto', padding: '6px 10px', minHeight: 80, maxHeight: 180 },
-  chatMsg: { fontSize: 11, marginBottom: 4, lineHeight: 1.4 },
-  chatInput: { display: 'flex', gap: 5, padding: '6px 8px', borderTop: '1px solid rgba(255,255,255,0.05)' },
-  chatInputField: { flex: 1, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 7, padding: '6px 8px', color: '#fff', fontSize: 12, outline: 'none', fontFamily: 'Georgia, serif' },
-  chatSend: { background: 'linear-gradient(135deg, #f0c040, #c8860a)', border: 'none', borderRadius: 7, color: '#061a26', fontWeight: 900, fontSize: 9, padding: '6px 8px', cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  chatArea: { background: 'rgba(0,0,0,0.35)', borderTop: '1px solid rgba(255,255,255,0.05)', padding: '6px 12px 8px' },
+  chatMessages: { overflowY: 'auto', maxHeight: 60, marginBottom: 5 },
+  chatMsg: { fontSize: 11, marginBottom: 2, lineHeight: 1.4 },
+  chatInput: { display: 'flex', gap: 5 },
+  chatInputField: { flex: 1, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 7, padding: '5px 8px', color: '#fff', fontSize: 12, outline: 'none', fontFamily: 'Georgia, serif' },
+  chatSend: { background: 'linear-gradient(135deg, #f0c040, #c8860a)', border: 'none', borderRadius: 7, color: '#061a26', fontWeight: 900, fontSize: 9, padding: '5px 8px', cursor: 'pointer', fontFamily: 'Georgia, serif' },
   modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: 16, fontFamily: 'Georgia, serif' },
   modal: { background: 'linear-gradient(135deg, #061a26, #0a2e3d)', border: '1px solid rgba(240,192,64,0.2)', borderRadius: 20, padding: 24, width: '100%', maxWidth: 360, maxHeight: '85vh', overflowY: 'auto' },
   modalTitle: { color: '#f0c040', margin: '8px 0 4px', fontSize: 18, letterSpacing: 3 },
