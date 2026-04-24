@@ -342,25 +342,53 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
       }
     }
     const newCards = [...combo.cards, ...cardsToAdd];
-    // After opening, just check if resulting cards are valid - no type restriction
-    const allNonJokers = newCards.filter(c => !c.isJoker);
-    const allSameRank = allNonJokers.every(c => c.rank === allNonJokers[0].rank);
-    const allSameSuit = allNonJokers.every(c => c.suit === allNonJokers[0].suit);
-    const noDupSuits = new Set(allNonJokers.map(c => c.suit)).size === allNonJokers.length;
+    // After opening, cards on table can grow freely
+    // Check each added card is compatible with the existing combo
+    const existingNonJokers = combo.cards.filter(c => !c.isJoker);
     const jokerCount = newCards.filter(c => c.isJoker).length;
+    if (jokerCount > 1) { showMsg('Una combinazione puo avere solo un jolly!'); return; }
 
     let valid = false;
-    if (jokerCount <= 1) {
-      // Tris/Poker: same rank, no duplicate suits, 2-4 cards
-      if (allSameRank && noDupSuits && newCards.length >= 2 && newCards.length <= 4) valid = true;
-      // Scala: same suit, sequential
-      if (allSameSuit && newCards.length >= 3) {
-        const orders = allNonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
-        let gaps = 0;
-        for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i-1] - 1;
-        if (gaps <= jokerCount) valid = true;
+
+    // Group existing cards by rank
+    const rankGroups = {};
+    existingNonJokers.forEach(c => {
+      if (!rankGroups[c.rank]) rankGroups[c.rank] = [];
+      rankGroups[c.rank].push(c);
+    });
+
+    // Check if each new card fits into existing rank groups or extends a scala
+    const newNonJokers = cardsToAdd.filter(c => !c.isJoker);
+    const allNonJokers = newCards.filter(c => !c.isJoker);
+    const allSameSuit = allNonJokers.length > 0 && allNonJokers.every(c => c.suit === allNonJokers[0].suit);
+
+    // Case 1: scala - all same suit sequential
+    if (allSameSuit) {
+      const orders = allNonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
+      let gaps = 0;
+      for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i-1] - 1;
+      if (gaps <= jokerCount && newCards.length >= 3) valid = true;
+    }
+
+    // Case 2: each new card matches an existing rank group (tris/poker extension)
+    if (!valid) {
+      const allFit = newNonJokers.every(newCard => {
+        const group = rankGroups[newCard.rank] || [];
+        const allGroupSuits = [...group.map(c => c.suit), newCard.suit];
+        return new Set(allGroupSuits).size === allGroupSuits.length;
+      });
+      if (allFit && newNonJokers.length > 0) {
+        // Verify no group exceeds 4 cards
+        const tempGroups = {};
+        allNonJokers.forEach(c => {
+          if (!tempGroups[c.rank]) tempGroups[c.rank] = [];
+          tempGroups[c.rank].push(c);
+        });
+        const noGroupTooLarge = Object.values(tempGroups).every(g => g.length <= 4);
+        if (noGroupTooLarge) valid = true;
       }
     }
+
     if (!valid) { showMsg('Combinazione non valida!'); return; }
     await update(ref(db, 'rooms/' + roomCode), {
       ['hands/' + playerId]: myHand.filter(c => !selected.find(sc => sc.id === c.id)),
