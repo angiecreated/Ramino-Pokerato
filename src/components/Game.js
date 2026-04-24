@@ -372,20 +372,24 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
 
     // Case 2: each new card matches an existing rank group (tris/poker extension)
     if (!valid) {
-      const allFit = newNonJokers.every(newCard => {
-        const group = rankGroups[newCard.rank] || [];
-        const allGroupSuits = [...group.map(c => c.suit), newCard.suit];
-        return new Set(allGroupSuits).size === allGroupSuits.length;
-      });
-      if (allFit && newNonJokers.length > 0) {
-        // Verify no group exceeds 4 cards
-        const tempGroups = {};
-        allNonJokers.forEach(c => {
-          if (!tempGroups[c.rank]) tempGroups[c.rank] = [];
-          tempGroups[c.rank].push(c);
+      // If only adding a joker, it's always valid (it fills any gap)
+      if (newNonJokers.length === 0 && jokerCount === 1 && !comboHasJoker(combo)) {
+        valid = true;
+      } else if (newNonJokers.length > 0) {
+        const allFit = newNonJokers.every(newCard => {
+          const group = rankGroups[newCard.rank] || [];
+          const allGroupSuits = [...group.map(c => c.suit), newCard.suit];
+          return new Set(allGroupSuits).size === allGroupSuits.length;
         });
-        const noGroupTooLarge = Object.values(tempGroups).every(g => g.length <= 4);
-        if (noGroupTooLarge) valid = true;
+        if (allFit) {
+          const tempGroups = {};
+          allNonJokers.forEach(c => {
+            if (!tempGroups[c.rank]) tempGroups[c.rank] = [];
+            tempGroups[c.rank].push(c);
+          });
+          const noGroupTooLarge = Object.values(tempGroups).every(g => g.length <= 4);
+          if (noGroupTooLarge) valid = true;
+        }
       }
     }
 
