@@ -1,38 +1,55 @@
-export const SUITS = ['\u2660', '\u2665', '\u2666', '\u2663'];
+// ============================================================
+// POKERAMI - Game Logic
+// ============================================================
+
+export const SUITS = ['\u2660', '\u2665', '\u2666', '\u2663']; // spade, cuori, quadri, fiori
 export const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
 
+// Card point values (in hand at end)
 export const RANK_VALUES = {
   A: 11, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7,
   8: 8, 9: 9, 10: 10, J: 10, Q: 10, K: 10, JOKER: 25
 };
 
+// Card order for sequences
 export const RANK_ORDER = {
   A: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7,
   8: 8, 9: 9, 10: 10, J: 11, Q: 12, K: 13
 };
 
-export const VESTITE = ['A', 'K', 'Q', 'J'];
+// Figurate cards (for coppia/doppia coppia)
+export const FIGURATE = ['A', 'K', 'Q', 'J'];
 
+// The 8 aperture types
 export const APERTURE_TYPES = [
-  { id: 'coppia', label: 'COPPIA', desc: 'Coppia vestita (A K Q J)' },
-  { id: 'doppia_coppia', label: 'DOPPIA COPPIA', desc: 'Due coppie, almeno una vestita' },
-  { id: 'tris', label: 'TRIS', desc: '3 carte dello stesso valore' },
-  { id: 'full', label: 'FULL', desc: 'Tris + Coppia' },
-  { id: 'poker', label: 'POKER', desc: '4 carte dello stesso valore' },
-  { id: 'scala_colore', label: 'SCALA COLORE', desc: '5 carte in sequenza stesso seme' },
-  { id: 'scala_40', label: 'SCALA 40', desc: 'Sequenza >= 40 punti stesso seme' },
-  { id: 'chiusura', label: 'CHIUSURA', desc: 'Scendi e chiudi nello stesso turno' },
+  { id: 'coppia', label: 'COPPIA', desc: '2 carte figurate (A K Q J) semi diversi' },
+  { id: 'doppia_coppia', label: 'DOPPIA COPPIA', desc: 'Una coppia figurata + una coppia qualsiasi' },
+  { id: 'tris', label: 'TRIS', desc: '3 carte stesso valore semi diversi' },
+  { id: 'full', label: 'FULL', desc: 'Tris + Coppia (coppia qualsiasi)' },
+  { id: 'poker', label: 'POKER', desc: '4 carte stesso valore semi diversi' },
+  { id: 'reale', label: 'REALE', desc: '5 carte in ordine dello stesso seme' },
+  { id: 'quaranta', label: 'SCALA 40', desc: 'Combinazioni che raggiungono 40 punti' },
+  { id: 'chiusura', label: 'CHIUSURA', desc: 'Chiudi in mano con tutte le carte' },
 ];
+
+// ============================================================
+// DECK
+// ============================================================
 
 export function createDeck() {
   const deck = [];
   for (let d = 0; d < 2; d++) {
     for (const suit of SUITS) {
       for (const rank of RANKS) {
-        deck.push({ id: rank + suit + '_' + d, rank, suit, value: RANK_VALUES[rank], isJoker: false });
+        deck.push({
+          id: rank + suit + '_' + d,
+          rank, suit,
+          value: RANK_VALUES[rank],
+          isJoker: false
+        });
       }
     }
-    deck.push({ id: 'JOKER_' + d, rank: 'JOKER', suit: 'J', value: 25, isJoker: true });
+    deck.push({ id: 'JOKER_' + d, rank: 'JOKER', suit: 'JK', value: 25, isJoker: true });
   }
   return shuffle(deck);
 }
@@ -46,130 +63,214 @@ export function shuffle(arr) {
   return a;
 }
 
+// ============================================================
+// POINTS
+// ============================================================
+
+// Points remaining in hand (asso always 11 in hand)
 export function handPoints(cards) {
   if (!cards || cards.length === 0) return 0;
-  const hasOtherCards = cards.length > 1;
   return cards.reduce((s, c) => {
     if (c.isJoker) return s + 25;
-    if (c.rank === 'A') return s + (hasOtherCards ? 11 : 1);
     return s + (RANK_VALUES[c.rank] || 0);
   }, 0);
 }
 
+// Points for 40 calculation (asso: 1 in low sequence A-2-3, 11 otherwise)
+export function comboPoints(cards) {
+  if (!cards || cards.length === 0) return 0;
+  const nonJokers = cards.filter(c => !c.isJoker);
+  const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
+  const isLowSequence = orders[0] === 1 && orders[1] === 2; // A-2-...
+
+  return cards.reduce((s, c) => {
+    if (c.isJoker) return s + (c.declaredValue || 0);
+    if (c.rank === 'A') return s + (isLowSequence ? 1 : 11);
+    return s + (RANK_VALUES[c.rank] || 0);
+  }, 0);
+}
+
+// ============================================================
+// SORT HELPERS
+// ============================================================
+
+export function sortBySuit(cards) {
+  const suitOrder = { '\u2660': 0, '\u2665': 1, '\u2666': 2, '\u2663': 3, 'JK': 4 };
+  return [...cards].sort((a, b) => {
+    const sd = (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0);
+    if (sd !== 0) return sd;
+    return (RANK_ORDER[a.rank] || 0) - (RANK_ORDER[b.rank] || 0);
+  });
+}
+
+export function sortByValue(cards) {
+  const suitOrder = { '\u2660': 0, '\u2665': 1, '\u2666': 2, '\u2663': 3, 'JK': 4 };
+  return [...cards].sort((a, b) => {
+    const rd = (RANK_ORDER[a.rank] || 0) - (RANK_ORDER[b.rank] || 0);
+    if (rd !== 0) return rd;
+    return (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0);
+  });
+}
+
+// Sort cards for display on table (scala: by rank; tris/poker: by suit)
+export function sortForTable(cards) {
+  const nonJokers = cards.filter(c => !c.isJoker);
+  const jokers = cards.filter(c => c.isJoker);
+  if (nonJokers.length === 0) return cards;
+
+  const allSameSuit = nonJokers.every(c => c.suit === nonJokers[0].suit);
+  if (allSameSuit) {
+    // Scala - sort by rank
+    const sorted = nonJokers.sort((a, b) => RANK_ORDER[a.rank] - RANK_ORDER[b.rank]);
+    // Insert joker in the gap
+    if (jokers.length > 0) {
+      const withJoker = insertJokerInGap(sorted, jokers[0]);
+      return withJoker;
+    }
+    return sorted;
+  } else {
+    // Tris/Poker - sort by suit
+    const suitOrder = { '\u2660': 0, '\u2665': 1, '\u2666': 2, '\u2663': 3 };
+    const sorted = nonJokers.sort((a, b) => (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0));
+    return [...sorted, ...jokers];
+  }
+}
+
+function insertJokerInGap(sortedCards, joker) {
+  if (sortedCards.length < 2) return [...sortedCards, joker];
+  for (let i = 0; i < sortedCards.length - 1; i++) {
+    const curr = RANK_ORDER[sortedCards[i].rank];
+    const next = RANK_ORDER[sortedCards[i + 1].rank];
+    if (next - curr === 2) {
+      // Gap found - insert joker here
+      const result = [...sortedCards];
+      result.splice(i + 1, 0, joker);
+      return result;
+    }
+  }
+  // No gap in middle - joker goes at end
+  return [...sortedCards, joker];
+}
+
+// ============================================================
+// JOKER DECLARATION
+// ============================================================
+
+// Find what card a joker represents in a sorted scala
+export function getJokerDeclaration(sortedCards, joker) {
+  const idx = sortedCards.findIndex(c => c.id === joker.id);
+  if (idx === -1) return null;
+  const prev = sortedCards[idx - 1];
+  const next = sortedCards[idx + 1];
+  if (prev && next) {
+    const prevOrder = RANK_ORDER[prev.rank];
+    const nextOrder = RANK_ORDER[next.rank];
+    if (nextOrder - prevOrder === 2) {
+      const missingOrder = prevOrder + 1;
+      const rankEntry = Object.entries(RANK_ORDER).find(([r, o]) => o === missingOrder);
+      if (rankEntry) return rankEntry[0] + prev.suit;
+    }
+  }
+  if (!prev && next) {
+    const nextOrder = RANK_ORDER[next.rank];
+    if (nextOrder > 1) {
+      const rankEntry = Object.entries(RANK_ORDER).find(([r, o]) => o === nextOrder - 1);
+      if (rankEntry) return rankEntry[0] + next.suit;
+    }
+  }
+  if (prev && !next) {
+    const prevOrder = RANK_ORDER[prev.rank];
+    if (prevOrder < 13) {
+      const rankEntry = Object.entries(RANK_ORDER).find(([r, o]) => o === prevOrder + 1);
+      if (rankEntry) return rankEntry[0] + prev.suit;
+    }
+  }
+  return null;
+}
+
+// Get missing suits for tris joker declaration
+export function getMissingTrisSuits(nonJokerCards) {
+  const usedSuits = nonJokerCards.map(c => c.suit);
+  return SUITS.filter(s => !usedSuits.includes(s));
+}
+
+// ============================================================
+// APERTURA VALIDATION (no jokers allowed)
+// ============================================================
+
 export function detectApertura(cards) {
   if (!cards || cards.length === 0) return null;
-  if (cards.some(c => c.isJoker)) return null;
+  if (cards.some(c => c.isJoker)) return null; // no jokers in apertura
+
   if (isCoppia(cards)) return 'coppia';
   if (isDoppiaCoppia(cards)) return 'doppia_coppia';
   if (isTris(cards)) return 'tris';
   if (isFull(cards)) return 'full';
   if (isPoker(cards)) return 'poker';
-  if (isScalaColore(cards)) return 'scala_colore';
-  if (isScala40(cards)) return 'scala_40';
+  if (isReale(cards)) return 'reale';
+  if (isQuaranta(cards)) return 'quaranta';
   return null;
 }
 
-// Returns true if combination already has a joker
-export function comboHasJoker(combo) {
-  if (!combo || !combo.cards) return false;
-  return combo.cards.some(c => c.isJoker);
-}
-
-// For tris: determine which suits are missing to declare joker
-export function getMissingTrisSuits(cards) {
-  const nonJokers = cards.filter(c => !c.isJoker);
-  if (nonJokers.length === 0) return [];
-  const rank = nonJokers[0].rank;
-  const allSuits = ['♠', '♥', '♦', '♣'];
-  const usedSuits = nonJokers.map(c => c.suit);
-  return allSuits.filter(s => !usedSuits.includes(s));
-}
-
-// Determine joker declaration based on selection order for scala
-// selectionOrder: array of cards in the order they were selected
-export function getJokerDeclaration(selectionOrder, jokerCard) {
-  if (!jokerCard || !jokerCard.isJoker) return null;
-  const nonJokers = selectionOrder.filter(c => !c.isJoker);
-  if (nonJokers.length === 0) return null;
-
-  const jokerIdx = selectionOrder.indexOf(jokerCard);
-  const beforeJoker = selectionOrder.slice(0, jokerIdx).filter(c => !c.isJoker);
-  const afterJoker = selectionOrder.slice(jokerIdx + 1).filter(c => !c.isJoker);
-
-  // If joker is in the middle, it fills the gap
-  if (beforeJoker.length > 0 && afterJoker.length > 0) {
-    const suit = nonJokers[0].suit;
-    const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
-    // Find gap
-    for (let i = 1; i < orders.length; i++) {
-      if (orders[i] - orders[i-1] === 2) {
-        const missingOrder = orders[i-1] + 1;
-        const rankEntry = Object.entries(RANK_ORDER).find(([r, o]) => o === missingOrder);
-        if (rankEntry) return rankEntry[0] + suit;
-      }
-    }
-    return null;
-  }
-
-  // Joker at start - it comes before the first card
-  if (afterJoker.length > 0 && beforeJoker.length === 0) {
-    const suit = afterJoker[0].suit;
-    const firstOrder = RANK_ORDER[afterJoker[0].rank];
-    if (firstOrder > 1) {
-      const rankEntry = Object.entries(RANK_ORDER).find(([r, o]) => o === firstOrder - 1);
-      if (rankEntry) return rankEntry[0] + suit;
-    }
-  }
-
-  // Joker at end - it comes after the last card
-  if (beforeJoker.length > 0 && afterJoker.length === 0) {
-    const suit = beforeJoker[beforeJoker.length - 1].suit;
-    const lastOrder = RANK_ORDER[beforeJoker[beforeJoker.length - 1].rank];
-    if (lastOrder < 13) {
-      const rankEntry = Object.entries(RANK_ORDER).find(([r, o]) => o === lastOrder + 1);
-      if (rankEntry) return rankEntry[0] + suit;
-    }
-  }
-
-  return null;
-}
-
+// Coppia: exactly 2 figurate cards, same rank, different suits
 export function isCoppia(cards) {
   if (cards.length !== 2) return false;
+  if (!cards.every(c => FIGURATE.includes(c.rank))) return false;
   if (cards[0].rank !== cards[1].rank) return false;
-  return VESTITE.includes(cards[0].rank);
+  return cards[0].suit !== cards[1].suit;
 }
 
+// Doppia coppia: one figurate pair + one any pair, different suits within each pair
 export function isDoppiaCoppia(cards) {
   if (cards.length !== 4) return false;
   const ranks = cards.map(c => c.rank);
   const unique = [...new Set(ranks)];
   if (unique.length !== 2) return false;
-  const count0 = ranks.filter(r => r === unique[0]).length;
-  const count1 = ranks.filter(r => r === unique[1]).length;
-  if (count0 !== 2 || count1 !== 2) return false;
-  // At least one pair must be vestita
-  return VESTITE.includes(unique[0]) || VESTITE.includes(unique[1]);
+  const group0 = cards.filter(c => c.rank === unique[0]);
+  const group1 = cards.filter(c => c.rank === unique[1]);
+  if (group0.length !== 2 || group1.length !== 2) return false;
+  // Each pair must have different suits
+  if (group0[0].suit === group0[1].suit) return false;
+  if (group1[0].suit === group1[1].suit) return false;
+  // At least one pair must be figurata
+  return FIGURATE.includes(unique[0]) || FIGURATE.includes(unique[1]);
 }
 
+// Tris: 3 cards same rank, all different suits
 export function isTris(cards) {
-  return cards.length === 3 && cards.every(c => c.rank === cards[0].rank);
+  if (cards.length !== 3) return false;
+  if (!cards.every(c => c.rank === cards[0].rank)) return false;
+  const suits = cards.map(c => c.suit);
+  return new Set(suits).size === 3;
 }
 
+// Full: tris (3 same rank different suits) + coppia (2 same rank different suits)
 export function isFull(cards) {
   if (cards.length !== 5) return false;
   const ranks = cards.map(c => c.rank);
   const unique = [...new Set(ranks)];
   if (unique.length !== 2) return false;
-  const c0 = ranks.filter(r => r === unique[0]).length;
-  return c0 === 3 || c0 === 2;
+  const group0 = cards.filter(c => c.rank === unique[0]);
+  const group1 = cards.filter(c => c.rank === unique[1]);
+  const trisGroup = group0.length === 3 ? group0 : group1;
+  const coppiaGroup = group0.length === 2 ? group0 : group1;
+  if (trisGroup.length !== 3 || coppiaGroup.length !== 2) return false;
+  // Tris: all different suits
+  if (new Set(trisGroup.map(c => c.suit)).size !== 3) return false;
+  // Coppia: different suits
+  return coppiaGroup[0].suit !== coppiaGroup[1].suit;
 }
 
+// Poker: 4 cards same rank, all different suits
 export function isPoker(cards) {
-  return cards.length === 4 && cards.every(c => c.rank === cards[0].rank);
+  if (cards.length !== 4) return false;
+  if (!cards.every(c => c.rank === cards[0].rank)) return false;
+  const suits = cards.map(c => c.suit);
+  return new Set(suits).size === 4;
 }
 
-export function isScalaColore(cards) {
+// Reale: exactly 5 cards same suit in sequence
+export function isReale(cards) {
   if (cards.length !== 5) return false;
   if (!cards.every(c => c.suit === cards[0].suit)) return false;
   const orders = cards.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
@@ -179,113 +280,208 @@ export function isScalaColore(cards) {
   return true;
 }
 
-export function isScala40(cards) {
-  if (cards.length < 3) return false;
-  if (!cards.every(c => c.suit === cards[0].suit)) return false;
-  const orders = cards.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
-  for (let i = 1; i < orders.length; i++) {
-    if (orders[i] !== orders[i - 1] + 1) return false;
-  }
-  return cards.reduce((s, c) => s + (RANK_VALUES[c.rank] || 0), 0) >= 40;
+// Quaranta: one or more combinations totaling >= 40 points
+// Can be: a poker of 10s, two tris of J, two sequences, etc.
+export function isQuaranta(cards) {
+  if (cards.length < 2) return false;
+  // Try to split cards into valid groups that total >= 40
+  return tryQuarantaGroups(cards);
 }
 
-// For apertura validation - no jokers allowed
-export function validateApertura(cards, type) {
-  if (!cards || cards.length === 0) return false;
-  if (cards.some(c => c.isJoker)) return false;
-  switch (type) {
-    case 'coppia': return isCoppia(cards);
-    case 'doppia_coppia': return isDoppiaCoppia(cards);
-    case 'tris': return isTris(cards);
-    case 'full': return isFull(cards);
-    case 'poker': return isPoker(cards);
-    case 'scala_colore': return isScalaColore(cards);
-    case 'scala_40': return isScala40(cards);
-    default: return false;
-  }
+function tryQuarantaGroups(cards) {
+  const total = comboPoints(cards);
+  if (total < 40) return false;
+  // Check if cards form one or more valid combinations
+  return canFormValidGroups(cards);
 }
 
-// For table play after opening - only tris, poker, scala (min 3 cards) - jokers allowed
+function canFormValidGroups(cards) {
+  if (cards.length === 0) return true;
+
+  // Try all possible first group sizes
+  for (let size = 2; size <= cards.length; size++) {
+    const combos = getCombinations(cards, size);
+    for (const combo of combos) {
+      if (isValidSingleGroup(combo)) {
+        const remaining = cards.filter(c => !combo.find(x => x.id === c.id));
+        if (remaining.length === 0 || canFormValidGroups(remaining)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isValidSingleGroup(cards) {
+  const nonJokers = cards.filter(c => !c.isJoker);
+  if (nonJokers.length === 0) return false;
+  // Tris (3 same rank different suits)
+  if (cards.length === 3 && nonJokers.every(c => c.rank === nonJokers[0].rank)) {
+    return new Set(nonJokers.map(c => c.suit)).size === nonJokers.length;
+  }
+  // Poker (4 same rank different suits)
+  if (cards.length === 4 && nonJokers.every(c => c.rank === nonJokers[0].rank)) {
+    return new Set(nonJokers.map(c => c.suit)).size === nonJokers.length;
+  }
+  // Scala (3+ same suit sequential)
+  if (cards.length >= 3 && nonJokers.every(c => c.suit === nonJokers[0].suit)) {
+    const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
+    let gaps = 0;
+    for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i - 1] - 1;
+    return gaps === 0;
+  }
+  return false;
+}
+
+// ============================================================
+// TABLE COMBINATION VALIDATION
+// ============================================================
+
+// Validate a new combination to put on table (after opening, no jokers)
 export function isValidTableCombination(cards) {
   if (!cards || cards.length < 3) return false;
   const nonJokers = cards.filter(c => !c.isJoker);
   const jokerCount = cards.filter(c => c.isJoker).length;
+  if (jokerCount > 1) return false; // max 1 joker
   if (nonJokers.length === 0) return false;
-  if (jokerCount > 1) return false;
 
-  // Tris or poker (same rank, 3-4 cards) - no duplicate suits allowed
-  const rank = nonJokers[0].rank;
-  if (nonJokers.every(c => c.rank === rank) && cards.length >= 3 && cards.length <= 4) {
-    const suits = nonJokers.map(c => c.suit);
-    const uniqueSuits = new Set(suits);
-    if (uniqueSuits.size === suits.length) return true; // no duplicate suits
+  // Tris: 3 same rank, different suits, no jokers needed
+  if (cards.length === 3 && nonJokers.length === 3) {
+    if (nonJokers.every(c => c.rank === nonJokers[0].rank)) {
+      return new Set(nonJokers.map(c => c.suit)).size === 3;
+    }
   }
 
-  // Scala (sequential same suit, min 3 cards) - jokers can fill gaps
-  const suit = nonJokers[0].suit;
-  if (nonJokers.every(c => c.suit === suit)) {
+  // Poker: 4 same rank, different suits
+  if (cards.length === 4 && nonJokers.length === 4) {
+    if (nonJokers.every(c => c.rank === nonJokers[0].rank)) {
+      return new Set(nonJokers.map(c => c.suit)).size === 4;
+    }
+  }
+
+  // Scala: min 3 same suit sequential, max 1 joker in gap
+  if (nonJokers.every(c => c.suit === nonJokers[0].suit)) {
     const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
+    // No duplicate ranks
+    if (new Set(orders).size !== orders.length) return false;
     let gaps = 0;
     for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i - 1] - 1;
     if (gaps <= jokerCount && cards.length >= 3) return true;
+  }
+
+  // Tris with joker (2 cards + joker)
+  if (cards.length === 3 && jokerCount === 1 && nonJokers.length === 2) {
+    if (nonJokers[0].rank === nonJokers[1].rank && nonJokers[0].suit !== nonJokers[1].suit) return true;
   }
 
   return false;
 }
 
-// For adding to existing table combos - jokers allowed
-// Also handles complex combos like doppia coppia where adding a card extends one group
-export function isValidCombination(cards) {
-  if (!cards || cards.length < 2) return false;
-  const nonJokers = cards.filter(c => !c.isJoker);
-  const jokerCount = cards.filter(c => c.isJoker).length;
-  if (nonJokers.length === 0) return false;
-  if (jokerCount > 1) return false;
-
-  // Simple tris/poker - all same rank, no duplicate suits
-  const rank = nonJokers[0].rank;
-  if (nonJokers.every(c => c.rank === rank) && cards.length >= 2 && cards.length <= 4) {
-    const suits = nonJokers.map(c => c.suit);
-    if (new Set(suits).size === suits.length) return true;
+// Check if a card can be added to an existing table combination
+// Returns: { valid: bool, reason: string, newCards: array }
+export function canAddToCombo(existingCards, newCards) {
+  if (!existingCards || !newCards || newCards.length === 0) {
+    return { valid: false, reason: 'Nessuna carta selezionata' };
   }
 
-  // Scala - all same suit, sequential
-  const suit = nonJokers[0].suit;
-  if (nonJokers.every(c => c.suit === suit)) {
-    const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
+  const allJokers = [...existingCards, ...newCards].filter(c => c.isJoker);
+  if (allJokers.length > 1) {
+    return { valid: false, reason: 'Una combinazione puo avere solo un jolly!' };
+  }
+
+  const existingNonJokers = existingCards.filter(c => !c.isJoker);
+  const newNonJokers = newCards.filter(c => !c.isJoker);
+  const allCards = [...existingCards, ...newCards];
+  const allNonJokers = allCards.filter(c => !c.isJoker);
+  const jokerCount = allJokers.length;
+
+  // Determine combo type from existing cards
+  const isScala = existingNonJokers.length >= 2 &&
+    existingNonJokers.every(c => c.suit === existingNonJokers[0].suit);
+  const isTrisPoker = existingNonJokers.length >= 2 &&
+    existingNonJokers.every(c => c.rank === existingNonJokers[0].rank);
+
+  if (isScala) {
+    // All cards must be same suit
+    if (!allNonJokers.every(c => c.suit === existingNonJokers[0].suit)) {
+      return { valid: false, reason: 'Le carte devono essere dello stesso seme della scala!' };
+    }
+    // No duplicate ranks
+    const orders = allNonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
+    if (new Set(orders).size !== orders.length) {
+      return { valid: false, reason: 'Rank duplicato nella scala!' };
+    }
+    // Check sequential with max 1 joker gap
     let gaps = 0;
     for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i - 1] - 1;
-    if (gaps <= jokerCount && cards.length >= 3) return true;
+    if (gaps > jokerCount) {
+      return { valid: false, reason: 'Le carte non sono in sequenza!' };
+    }
+    // Max 2 cards added to existing scala
+    if (newNonJokers.length + (newCards.some(c => c.isJoker) ? 1 : 0) > 2) {
+      return { valid: false, reason: 'Puoi aggiungere massimo 2 carte a una scala!' };
+    }
+    // Sort and return
+    const sorted = sortForTable(allCards);
+    return { valid: true, newCards: sorted };
   }
 
-  // Complex combos: doppia coppia, full - group by rank and check each group
+  if (isTrisPoker) {
+    const rank = existingNonJokers[0].rank;
+    // All new non-joker cards must be same rank
+    if (!newNonJokers.every(c => c.rank === rank)) {
+      return { valid: false, reason: 'Le carte devono essere dello stesso valore!' };
+    }
+    // No duplicate suits
+    const suits = allNonJokers.map(c => c.suit);
+    if (new Set(suits).size !== suits.length) {
+      return { valid: false, reason: 'Semi duplicati nel tris/poker!' };
+    }
+    // Max 4 cards (poker)
+    if (allCards.length > 4) {
+      return { valid: false, reason: 'Non puoi avere piu di 4 carte dello stesso valore!' };
+    }
+    // Only joker alone allowed if tris is complete
+    if (newCards.length === 1 && newCards[0].isJoker) {
+      // Check if adding joker makes sense (fills a missing suit)
+      const missingSuits = SUITS.filter(s => !suits.includes(s));
+      if (missingSuits.length === 0) {
+        return { valid: false, reason: 'Gia tutte le 4 carte presenti!' };
+      }
+    }
+    const sorted = sortForTable(allCards);
+    return { valid: true, newCards: sorted };
+  }
+
+  // Mixed combo (full, doppia coppia) - check each new card fits a rank group
   const rankGroups = {};
-  nonJokers.forEach(c => {
+  existingNonJokers.forEach(c => {
     if (!rankGroups[c.rank]) rankGroups[c.rank] = [];
     rankGroups[c.rank].push(c);
   });
-  const groups = Object.values(rankGroups);
 
-  // Doppia coppia extended (e.g. J J 8 8 + J = tris J + coppia 8)
-  if (groups.length === 2) {
-    const valid = groups.every(g => {
-      const suits = g.map(c => c.suit);
-      return new Set(suits).size === suits.length && g.length >= 2 && g.length <= 4;
-    });
-    if (valid && cards.length >= 4 && cards.length <= 8) return true;
+  for (const card of newNonJokers) {
+    const group = rankGroups[card.rank];
+    if (!group) return { valid: false, reason: card.rank + ' non corrisponde a nessun gruppo!' };
+    const groupSuits = group.map(c => c.suit);
+    if (groupSuits.includes(card.suit)) return { valid: false, reason: 'Seme duplicato nel gruppo!' };
+    if (group.length >= 4) return { valid: false, reason: 'Gruppo gia completo!' };
   }
 
-  // Full extended (tris + coppia + extra)
-  if (groups.length <= 2 && cards.length >= 5 && cards.length <= 8) {
-    const valid = groups.every(g => {
-      const suits = g.map(c => c.suit);
-      return new Set(suits).size === suits.length && g.length >= 2 && g.length <= 4;
-    });
-    if (valid) return true;
+  // Joker alone on mixed combo
+  if (newCards.length === 1 && newCards[0].isJoker && allJokers.length === 1) {
+    return { valid: true, newCards: allCards };
   }
 
-  return false;
+  if (newNonJokers.length > 0) {
+    return { valid: true, newCards: allCards };
+  }
+
+  return { valid: false, reason: 'Combinazione non valida!' };
 }
+
+// ============================================================
+// CHIUSURA IN MANO
+// ============================================================
 
 export function canChiuderInMano(cards) {
   if (!cards || cards.length === 0) return false;
@@ -295,10 +491,11 @@ export function canChiuderInMano(cards) {
 function tryGroupCards(cards) {
   if (cards.length === 0) return true;
   if (cards.length < 2) return false;
-  for (let size = 2; size <= Math.min(cards.length, 13); size++) {
+
+  for (let size = 2; size <= cards.length; size++) {
     const combos = getCombinations(cards, size);
     for (const combo of combos) {
-      if (isValidCombination(combo)) {
+      if (isValidSingleGroupWithJoker(combo)) {
         const remaining = cards.filter(c => !combo.find(x => x.id === c.id));
         if (remaining.length === 0 || tryGroupCards(remaining)) return true;
       }
@@ -306,6 +503,40 @@ function tryGroupCards(cards) {
   }
   return false;
 }
+
+function isValidSingleGroupWithJoker(cards) {
+  const nonJokers = cards.filter(c => !c.isJoker);
+  const jokerCount = cards.filter(c => c.isJoker).length;
+  if (jokerCount > 1) return false;
+  if (nonJokers.length === 0) return false;
+
+  // Tris (with or without joker)
+  if (cards.length === 3 && nonJokers.every(c => c.rank === nonJokers[0].rank)) {
+    const suits = nonJokers.map(c => c.suit);
+    return new Set(suits).size === suits.length;
+  }
+
+  // Poker (with or without joker)
+  if (cards.length === 4 && nonJokers.every(c => c.rank === nonJokers[0].rank)) {
+    const suits = nonJokers.map(c => c.suit);
+    return new Set(suits).size === suits.length;
+  }
+
+  // Scala (with or without joker)
+  if (nonJokers.every(c => c.suit === nonJokers[0].suit) && cards.length >= 3) {
+    const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
+    if (new Set(orders).size !== orders.length) return false;
+    let gaps = 0;
+    for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i - 1] - 1;
+    return gaps <= jokerCount;
+  }
+
+  return false;
+}
+
+// ============================================================
+// UTILITIES
+// ============================================================
 
 function getCombinations(arr, size) {
   if (size > arr.length) return [];
@@ -319,26 +550,11 @@ function getCombinations(arr, size) {
   return result;
 }
 
-// Sort cards by suit then rank
-export function sortBySuit(cards) {
-  const suitOrder = { '\u2660': 0, '\u2665': 1, '\u2666': 2, '\u2663': 3, 'J': 4 };
-  return [...cards].sort((a, b) => {
-    const suitDiff = (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0);
-    if (suitDiff !== 0) return suitDiff;
-    return (RANK_ORDER[a.rank] || 0) - (RANK_ORDER[b.rank] || 0);
-  });
-}
-
-// Sort cards by rank then suit
-export function sortByValue(cards) {
-  const suitOrder = { '\u2660': 0, '\u2665': 1, '\u2666': 2, '\u2663': 3, 'J': 4 };
-  return [...cards].sort((a, b) => {
-    const rankDiff = (RANK_ORDER[a.rank] || 0) - (RANK_ORDER[b.rank] || 0);
-    if (rankDiff !== 0) return rankDiff;
-    return (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0);
-  });
-}
-
 export function generateRoomCode() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
+export function comboHasJoker(combo) {
+  if (!combo || !combo.cards) return false;
+  return combo.cards.some(c => c.isJoker);
 }

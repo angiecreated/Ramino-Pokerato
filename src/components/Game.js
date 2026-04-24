@@ -3,9 +3,11 @@ import { db } from '../firebase/config';
 import { ref, onValue, update } from 'firebase/database';
 import Card from './Card';
 import {
-  APERTURE_TYPES, handPoints, isValidCombination, isValidTableCombination,
-  detectApertura, canChiuderInMano, createDeck, shuffle, sortBySuit, sortByValue,
-  comboHasJoker, getMissingTrisSuits, getJokerDeclaration,
+  APERTURE_TYPES, handPoints, isValidTableCombination,
+  detectApertura, canChiuderInMano, createDeck, shuffle,
+  sortBySuit, sortByValue, sortForTable, canAddToCombo,
+  getMissingTrisSuits, getJokerDeclaration, comboHasJoker,
+  RANK_ORDER,
 } from '../utils/gameLogic';
 
 const COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c'];
@@ -13,19 +15,16 @@ const COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c'
 export default function Game({ roomCode, playerId, playerName, room: initialRoom }) {
   const [room, setRoom] = useState(initialRoom);
   const [selected, setSelected] = useState([]);
-  const [showChat, setShowChat] = useState(false);
+  const [selectionOrder, setSelectionOrder] = useState([]);
   const [showAperture, setShowAperture] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [msg, setMsg] = useState({ text: '', type: 'error' });
   const [showScores, setShowScores] = useState(false);
-  const [discardTimer, setDiscardTimer] = useState(null);
+  const [jokerModal, setJokerModal] = useState(null);
   const [moveMode, setMoveMode] = useState(false);
   const [moveSelected, setMoveSelected] = useState([]);
-  const [selectionOrder, setSelectionOrder] = useState([]);
-  const [jokerModal, setJokerModal] = useState(null);
   const chatRef = useRef(null);
-  const touchRef = useRef({ active: false, startIdx: null, startX: 0, startY: 0 });
-  const timerRef = useRef(null);
+  const dragRef = useRef({ startIdx: null });
 
   useEffect(() => {
     const unsub = onValue(ref(db, 'rooms/' + roomCode), snap => {
@@ -33,14 +32,6 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
       if (data) {
         setRoom(data);
         if (data.status === 'handEnd') setShowScores(true);
-        // Start discard timer when someone draws
-        if (data.discardAvailable && data.discardAvailableAt) {
-          const elapsed = Date.now() - data.discardAvailableAt;
-          const remaining = Math.max(0, 10 - Math.floor(elapsed / 1000));
-          setDiscardTimer(remaining);
-        } else {
-          setDiscardTimer(null);
-        }
       }
     });
     return () => unsub();
@@ -49,18 +40,6 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
   useEffect(() => {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
   }, [room && room.chatMessages]);
-
-  // Countdown timer for discard
-  useEffect(() => {
-    if (discardTimer === null) return;
-    if (discardTimer <= 0) {
-      // Time's up - clear discard availability
-      update(ref(db, 'rooms/' + roomCode), { discardAvailable: false, discardQueue: [] });
-      return;
-    }
-    timerRef.current = setTimeout(() => setDiscardTimer(t => t !== null ? t - 1 : null), 1000);
-    return () => clearTimeout(timerRef.current);
-  }, [discardTimer]);
 
   if (!room) return <div style={s.loading}>Caricamento...</div>;
 
@@ -73,13 +52,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
   const myColor = COLORS[playerOrder.indexOf(playerId)] || '#f0c040';
   const myPoints = handPoints(myHand);
   const detectedApertura = detectApertura(selected);
-  const myPlayerIndex = playerOrder.indexOf(playerId);
-
-  // Can I take the discard?
-  const canTakeDiscard = room.discardAvailable && !isMyTurn && room.topDiscard;
-  const imInQueue = room.discardQueue && room.discardQueue.includes(playerId);
-  const isFirstPlayer = myPlayerIndex === 0;
-  const isFirstManoCard = room.firstManoCard && room.manoCardTaken === false;
+  const canAbbassa = me.aperta && !me.apertaQuestoTurno && isMyTurn && room.drawnThisTurn;
 
   const addLog = async (text) => {
     const logs = room.log || [];
@@ -100,45 +73,31 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     setChatInput('');
   };
 
-  // Take first mano card (only first player)
-  const takeFirstManoCard = async () => {
-    if (!isFirstPlayer || room.manoCardTaken) return;
-    const card = room.topDiscard;
-    if (!card) return;
-    await update(ref(db, 'rooms/' + roomCode), {
-      ['hands/' + playerId]: [...myHand, card],
-      topDiscard: null,
-      manoCardTaken: true,
-      drawnThisTurn: true,
-    });
-    await addLog(playerName + ' prende la prima carta.');
-  };
-
+  // DRAW FROM DECK
   const drawFromDeck = async () => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (room.drawnThisTurn) { showMsg('Hai gia pescato!'); return; }
     let deck = [...(room.deck || [])];
     if (deck.length === 0) {
-      const tablePoker = (room.table || []).filter(c => c.type === 'poker').flatMap(c => c.cards);
-      deck = shuffle([...tablePoker, ...(room.discardPile || [])]);
-      await update(ref(db, 'rooms/' + roomCode), { discardPile: [], topDiscard: null });
-      await addLog('Mazzo finito! Rimescolati.');
+      const discards = room.discardPile || [];
+      deck = shuffle([...discards]);
+      await update(ref(db, 'rooms/' + roomCode), { discardPile: [] });
+      await addLog('Mazzo finito! Rimescolati gli scarti.');
     }
     const card = deck[0];
     await update(ref(db, 'rooms/' + roomCode), {
       deck: deck.slice(1),
       ['hands/' + playerId]: [...myHand, card],
       drawnThisTurn: true,
-      discardAvailable: true,
-      discardAvailableAt: Date.now(),
-      discardQueue: [],
+      discardAvailable: false,
     });
   };
 
+  // DRAW FROM DISCARD
   const drawFromDiscard = async () => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (room.drawnThisTurn) { showMsg('Hai gia pescato!'); return; }
-    if (!room.topDiscard) { showMsg('Nessuna carta!'); return; }
+    if (!room.topDiscard) { showMsg('Nessuna carta negli scarti!'); return; }
     const card = room.topDiscard;
     const newDiscard = [...(room.discardPile || [])];
     await update(ref(db, 'rooms/' + roomCode), {
@@ -147,51 +106,12 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
       ['hands/' + playerId]: [...myHand, card],
       drawnThisTurn: true,
       discardAvailable: false,
-      discardQueue: [],
+      firstManoCard: false,
     });
-    await addLog(playerName + ' prende la carta scartata.');
+    await addLog(me.name + ' prende la carta scartata.');
   };
 
-  // Take discard out of turn
-  const takeDiscardOutOfTurn = async () => {
-    if (!canTakeDiscard || imInQueue) return;
-    if (!room.topDiscard) return;
-    // Check if I'm next in queue priority (by player order from current)
-    const queue = room.discardQueue || [];
-    const currentIdx = room.currentPlayerIndex % playerOrder.length;
-    // Add me to queue
-    const newQueue = [...queue, playerId];
-    await update(ref(db, 'rooms/' + roomCode), { discardQueue: newQueue });
-    showMsg('Sei in coda per lo scarto!', 'success');
-  };
-
-  // Claim discard from queue
-  const claimDiscardFromQueue = async () => {
-    if (!room.discardAvailable || !room.topDiscard) return;
-    const queue = room.discardQueue || [];
-    if (queue[0] !== playerId) { showMsg('Non e il tuo turno nella coda!'); return; }
-    const card = room.topDiscard;
-    const newDiscard = [...(room.discardPile || [])];
-    await update(ref(db, 'rooms/' + roomCode), {
-      topDiscard: newDiscard.length > 0 ? newDiscard[newDiscard.length - 1] : null,
-      discardPile: newDiscard.slice(0, -1),
-      ['hands/' + playerId]: [...myHand, card],
-      discardAvailable: false,
-      discardQueue: [],
-    });
-    await addLog(playerName + ' prende lo scarto dalla coda.');
-  };
-
-  const passDiscardQueue = async () => {
-    const queue = room.discardQueue || [];
-    if (queue[0] !== playerId) return;
-    const newQueue = queue.slice(1);
-    await update(ref(db, 'rooms/' + roomCode), {
-      discardQueue: newQueue,
-      discardAvailable: newQueue.length > 0,
-    });
-  };
-
+  // DISCARD
   const discardCard = async () => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (!room.drawnThisTurn) { showMsg('Devi prima pescare!'); return; }
@@ -200,114 +120,115 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     if (card.isJoker) { showMsg('Non puoi scartare il jolly!'); return; }
     const newDiscard = [...(room.discardPile || [])];
     if (room.topDiscard) newDiscard.push(room.topDiscard);
+    const nextIndex = (room.currentPlayerIndex + 1) % playerOrder.length;
     await update(ref(db, 'rooms/' + roomCode), {
       ['hands/' + playerId]: myHand.filter(c => c.id !== card.id),
-      discardPile: newDiscard, topDiscard: card,
-      currentPlayerIndex: (room.currentPlayerIndex + 1) % playerOrder.length,
+      discardPile: newDiscard,
+      topDiscard: card,
+      currentPlayerIndex: nextIndex,
       drawnThisTurn: false,
-      discardAvailable: false,
-      discardQueue: [],
+      discardAvailable: true,
+      ['players/' + playerId + '/apertaQuestoTurno']: false,
     });
     setSelected([]);
-    await addLog(playerName + ' scarta ' + card.rank + card.suit);
+    setSelectionOrder([]);
+    await addLog(me.name + ' scarta ' + card.rank + card.suit);
   };
 
+  // APERTURA
   const handleApertura = async () => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (!room.drawnThisTurn) { showMsg('Devi prima pescare!'); return; }
     if (me.aperta) { showMsg('Hai gia aperto!'); return; }
     if (selected.length === 0) { showMsg('Seleziona le carte per aprire'); return; }
     const aperturaId = detectApertura(selected);
-    if (!aperturaId) { showMsg('Combinazione non valida! Niente jolly in apertura.'); return; }
-    if (me.apertureUsate && me.apertureUsate[aperturaId]) { showMsg('Apertura gia usata!'); return; }
-    const newHand = myHand.filter(c => !selected.find(sc => sc.id === c.id));
-    // Sort scala cards before saving to table
-    let cardsForTable = [...selected];
-    const selNonJokers = selected.filter(c => !c.isJoker);
-    if (selNonJokers.length > 1 && selNonJokers.every(c => c.suit === selNonJokers[0].suit)) {
-      const jokers = selected.filter(c => c.isJoker);
-      cardsForTable = [...selNonJokers.sort((a, b) => RANK_ORDER[a.rank] - RANK_ORDER[b.rank]), ...jokers];
+    if (!aperturaId) { showMsg('Combinazione non valida per apertura! (niente jolly)'); return; }
+    if (me.apertureUsate && me.apertureUsate[aperturaId]) {
+      showMsg('Apertura gia usata in una partita precedente!'); return;
     }
+    const sorted = sortForTable(selected);
+    const newHand = myHand.filter(c => !selected.find(sc => sc.id === c.id));
     const newTable = [...(room.table || []), {
-      id: Date.now().toString(), playerId, playerName: me.name,
-      color: myColor, type: aperturaId, cards: cardsForTable,
+      id: Date.now().toString(), playerId,
+      playerName: me.name, color: myColor,
+      cards: sorted,
     }];
     const updates = {};
     updates['hands/' + playerId] = newHand;
     updates['players/' + playerId + '/apertureUsate/' + aperturaId] = true;
     updates['players/' + playerId + '/aperta'] = true;
+    updates['players/' + playerId + '/apertaQuestoTurno'] = true;
     updates.table = newTable;
     await update(ref(db, 'rooms/' + roomCode), updates);
     setSelected([]);
+    setSelectionOrder([]);
     const found = APERTURE_TYPES.find(a => a.id === aperturaId);
     showMsg('Aperto con ' + (found ? found.label : '') + '!', 'success');
     await addLog(me.name + ' apre con ' + (found ? found.label : ''));
   };
 
-  const handleAbbassCombinazione = async (declaredSuit) => {
-    if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
-    if (!room.drawnThisTurn) { showMsg('Devi prima pescare!'); return; }
-    if (!me.aperta) { showMsg('Devi prima aprire!'); return; }
-    if (me.apertaQuestoTurno) { showMsg('Puoi abbassare combinazioni dal prossimo turno!'); return; }
+  // ABBASSA COMBINAZIONE LIBERA
+  const handleAbbassa = async (declaredSuit) => {
+    if (!canAbbassa) {
+      if (!me.aperta) showMsg('Devi prima aprire!');
+      else if (me.apertaQuestoTurno) showMsg('Puoi abbassare dal prossimo turno!');
+      else showMsg('Non puoi abbassare adesso');
+      return;
+    }
     if (selected.length === 0) { showMsg('Seleziona le carte da abbassare'); return; }
-
-    const jokerCount = selected.filter(c => c.isJoker).length;
-    if (jokerCount > 1) { showMsg('Una combinazione puo avere solo un jolly!'); return; }
-
     if (!isValidTableCombination(selected)) {
-      showMsg('Solo tris, poker o scala (min 3 carte)!'); return;
+      showMsg('Combinazione non valida! Min 3 carte (tris, poker o scala)'); return;
     }
 
-    // Handle joker declaration
+    // Handle joker declaration in tris
+    const jokerCard = selected.find(c => c.isJoker);
     let cardsToPlay = [...selected];
-    if (jokerCount === 1) {
-      const jokerCard = selected.find(c => c.isJoker);
-      const isTrisLike = selected.filter(c => !c.isJoker).every(c => c.rank === selected.find(nc => !nc.isJoker).rank);
 
-      if (isTrisLike && !declaredSuit) {
-        // Need to declare suit for tris
-        const missingSuits = getMissingTrisSuits(selected);
-        if (missingSuits.length > 1) {
-          setJokerModal({ type: 'tris', suits: missingSuits, onConfirm: (suit) => {
-            setJokerModal(null);
-            handleAbbassCombinazione(suit);
-          }});
-          return;
-        }
-      }
+    if (jokerCard) {
+      const nonJokers = selected.filter(c => !c.isJoker);
+      const isTrisLike = nonJokers.length >= 2 && nonJokers.every(c => c.rank === nonJokers[0].rank);
 
-      // Auto-declare for scala based on selection order
-      let declaration = null;
       if (isTrisLike) {
-        if (declaredSuit) {
-          const nonJokerCard = selected.find(c => !c.isJoker);
-          declaration = nonJokerCard.rank + declaredSuit;
+        if (!declaredSuit) {
+          const missingSuits = getMissingTrisSuits(nonJokers);
+          if (missingSuits.length > 1) {
+            setJokerModal({
+              type: 'tris',
+              suits: missingSuits,
+              onConfirm: (suit) => { setJokerModal(null); handleAbbassa(suit); }
+            });
+            return;
+          } else if (missingSuits.length === 1) {
+            const declaration = nonJokers[0].rank + missingSuits[0];
+            cardsToPlay = cardsToPlay.map(c => c.isJoker ? Object.assign({}, c, { declaredAs: declaration }) : c);
+          }
+        } else {
+          const declaration = selected.find(c => !c.isJoker).rank + declaredSuit;
+          cardsToPlay = cardsToPlay.map(c => c.isJoker ? Object.assign({}, c, { declaredAs: declaration }) : c);
         }
       } else {
-        declaration = getJokerDeclaration(selectionOrder, jokerCard);
+        // Scala - auto declare from position
+        const sorted = sortForTable(cardsToPlay);
+        const declaration = getJokerDeclaration(sorted, jokerCard);
+        if (declaration) {
+          cardsToPlay = sorted.map(c => c.isJoker ? Object.assign({}, c, { declaredAs: declaration }) : c);
+        } else {
+          cardsToPlay = sorted;
+        }
       }
-
-      if (declaration && typeof declaration === 'string') {
-        cardsToPlay = cardsToPlay.map(c => c.isJoker ? Object.assign({}, c, { declaredAs: declaration }) : c);
-      }
+    } else {
+      cardsToPlay = sortForTable(cardsToPlay);
     }
 
     const newHand = myHand.filter(c => !selected.find(sc => sc.id === c.id));
-    // Sort scala cards in order
-    const nonJokersToPlay = cardsToPlay.filter(c => !c.isJoker);
-    const jokersToPlay = cardsToPlay.filter(c => c.isJoker);
-    const isScala = nonJokersToPlay.length > 1 && nonJokersToPlay.every(c => c.suit === nonJokersToPlay[0].suit);
-    let finalCards = cardsToPlay;
-    if (isScala) {
-      const sorted = nonJokersToPlay.sort((a, b) => RANK_ORDER[a.rank] - RANK_ORDER[b.rank]);
-      finalCards = [...sorted, ...jokersToPlay];
-    }
     const newTable = [...(room.table || []), {
-      id: Date.now().toString(), playerId, playerName: me.name,
-      color: myColor, type: 'libera', cards: finalCards, locked: false,
+      id: Date.now().toString(), playerId,
+      playerName: me.name, color: myColor,
+      cards: cardsToPlay,
     }];
     await update(ref(db, 'rooms/' + roomCode), {
-      ['hands/' + playerId]: newHand, table: newTable,
+      ['hands/' + playerId]: newHand,
+      table: newTable,
     });
     setSelected([]);
     setSelectionOrder([]);
@@ -315,144 +236,98 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     await addLog(me.name + ' abbassa una combinazione.');
   };
 
-  const addToCombo = async (comboId) => {
+  // ADD TO EXISTING COMBO
+  const addToCombo = async (comboId, declaredSuit) => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (!me.aperta) { showMsg('Devi prima aprire!'); return; }
     if (me.apertaQuestoTurno) { showMsg('Puoi aggiungere carte dal prossimo turno!'); return; }
-    if (selected.length === 0) { showMsg('Seleziona le carte'); return; }
+    if (!room.drawnThisTurn) { showMsg('Devi prima pescare!'); return; }
+    if (selected.length === 0) { showMsg('Seleziona le carte da aggiungere'); return; }
+
     const combo = room.table && room.table.find(c => c.id === comboId);
     if (!combo) return;
-    const addingJoker = selected.some(c => c.isJoker);
-    if (addingJoker && comboHasJoker(combo)) {
+
+    // Check single joker rule
+    if (selected.some(c => c.isJoker) && comboHasJoker(combo)) {
       showMsg('Una combinazione puo avere solo un jolly!'); return;
     }
+
+    // Handle joker declaration in tris
     let cardsToAdd = [...selected];
-    if (addingJoker) {
+    if (selected.some(c => c.isJoker)) {
       const jokerCard = selected.find(c => c.isJoker);
-      const allCards = [...combo.cards, ...selected];
-      const nonJokers = allCards.filter(c => !c.isJoker);
-      const isTrisLike = nonJokers.every(c => c.rank === nonJokers[0].rank);
+      const allNonJokers = [...combo.cards.filter(c => !c.isJoker), ...selected.filter(c => !c.isJoker)];
+      const isTrisLike = allNonJokers.every(c => c.rank === allNonJokers[0].rank);
+
       if (isTrisLike) {
-        const missingSuits = getMissingTrisSuits(allCards.filter(c => !c.isJoker));
-        if (missingSuits.length > 1) {
-          setJokerModal({ type: 'tris', suits: missingSuits, onConfirm: async (suit) => {
-            setJokerModal(null);
-            const declaration = nonJokers[0].rank + suit;
-            const declaredCards = cardsToAdd.map(c => c.isJoker ? Object.assign({}, c, { declaredAs: declaration }) : c);
-            const newCards = [...combo.cards, ...declaredCards];
-            await update(ref(db, 'rooms/' + roomCode), {
-              ['hands/' + playerId]: myHand.filter(c => !selected.find(sc => sc.id === c.id)),
-              table: room.table.map(c => c.id === comboId ? Object.assign({}, c, { cards: newCards }) : c),
+        if (!declaredSuit) {
+          const missingSuits = getMissingTrisSuits(allNonJokers);
+          if (missingSuits.length > 1) {
+            setJokerModal({
+              type: 'tris',
+              suits: missingSuits,
+              onConfirm: (suit) => { setJokerModal(null); addToCombo(comboId, suit); }
             });
-            setSelected([]);
-            await addLog(me.name + ' aggiunge carte al tavolo.');
-          }});
-          return;
-        } else if (missingSuits.length === 1) {
-          const declaration = nonJokers[0].rank + missingSuits[0];
-          cardsToAdd = cardsToAdd.map(c => c.isJoker ? Object.assign({}, c, { declaredAs: declaration }) : c);
-        }
-      } else {
-        const declaration = getJokerDeclaration(selectionOrder, jokerCard);
-        if (declaration && typeof declaration === 'string') {
+            return;
+          } else if (missingSuits.length === 1) {
+            const declaration = allNonJokers[0].rank + missingSuits[0];
+            cardsToAdd = cardsToAdd.map(c => c.isJoker ? Object.assign({}, c, { declaredAs: declaration }) : c);
+          }
+        } else {
+          const declaration = allNonJokers[0].rank + declaredSuit;
           cardsToAdd = cardsToAdd.map(c => c.isJoker ? Object.assign({}, c, { declaredAs: declaration }) : c);
         }
       }
     }
-    const newCards = [...combo.cards, ...cardsToAdd];
-    const existingNonJokers = combo.cards.filter(c => !c.isJoker);
-    const allNonJokers = newCards.filter(c => !c.isJoker);
-    const jokerCount = newCards.filter(c => c.isJoker).length;
-    if (jokerCount > 1) { showMsg('Una combinazione puo avere solo un jolly!'); return; }
 
-    // Simple check: each added card must be compatible with existing cards
-    // Group existing by rank to check tris/poker compatibility
-    const rankGroups = {};
-    existingNonJokers.forEach(c => {
-      if (!rankGroups[c.rank]) rankGroups[c.rank] = [];
-      rankGroups[c.rank].push(c);
-    });
-    const existingRanks = Object.keys(rankGroups);
-    const existingSuit = existingNonJokers.length > 0 ? existingNonJokers[0].suit : null;
-    const allExistingSameSuit = existingNonJokers.every(c => c.suit === existingSuit);
-    const allExistingSameRank = existingNonJokers.every(c => c.rank === existingNonJokers[0].rank);
+    const result = canAddToCombo(combo.cards, cardsToAdd);
+    if (!result.valid) { showMsg(result.reason || 'Combinazione non valida!'); return; }
 
-    const newNonJokers = cardsToAdd.filter(c => !c.isJoker);
-    let valid = false;
-
-    // Joker alone - always valid if no joker already
-    if (cardsToAdd.length === 1 && cardsToAdd[0].isJoker && !comboHasJoker(combo)) {
-      valid = true;
-    }
-    // Tris/Poker extension: existing is same rank, adding same rank different suit
-    else if (allExistingSameRank && newNonJokers.every(c => c.rank === existingNonJokers[0].rank)) {
-      const suits = allNonJokers.map(c => c.suit);
-      if (new Set(suits).size === suits.length && allNonJokers.length <= 4) valid = true;
-    }
-    // Scala extension: existing is same suit, adding same suit
-    else if (allExistingSameSuit && newNonJokers.every(c => c.suit === existingSuit)) {
-      const orders = allNonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
-      if (new Set(orders).size === orders.length) {
-        let gaps = 0;
-        for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i-1] - 1;
-        if (gaps <= jokerCount) valid = true;
-      }
-    }
-    // Mixed combo (full/doppia coppia): card must match an existing rank group
-    else if (existingRanks.length > 1) {
-      const allFit = newNonJokers.every(newCard => {
-        const group = rankGroups[newCard.rank];
-        if (!group) return false;
-        const allGroupSuits = [...group.map(c => c.suit), newCard.suit];
-        return new Set(allGroupSuits).size === allGroupSuits.length && group.length < 4;
-      });
-      if (allFit && newNonJokers.length > 0) valid = true;
-    }
-
-    if (!valid) { showMsg('Combinazione non valida!'); return; }
-
-    // Sort scala cards in order before saving
-    let finalCards = newCards;
-    if (allExistingSameSuit) {
-      const jokers = newCards.filter(c => c.isJoker);
-      const sorted = [...allNonJokers].sort((a, b) => RANK_ORDER[a.rank] - RANK_ORDER[b.rank]);
-      finalCards = [...sorted, ...jokers];
-    }
     await update(ref(db, 'rooms/' + roomCode), {
       ['hands/' + playerId]: myHand.filter(c => !selected.find(sc => sc.id === c.id)),
-      table: room.table.map(c => c.id === comboId ? Object.assign({}, c, { cards: finalCards }) : c),
+      table: room.table.map(c => c.id === comboId ? Object.assign({}, c, { cards: result.newCards }) : c),
     });
     setSelected([]);
+    setSelectionOrder([]);
     await addLog(me.name + ' aggiunge carte al tavolo.');
   };
 
+  // SWAP JOKER
   const swapJoker = async (comboId, jokerIdx) => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (!me.aperta) { showMsg('Devi prima aprire!'); return; }
-    if (selected.length !== 1 || selected[0].isJoker) { showMsg('Seleziona la carta vera'); return; }
+    if (selected.length !== 1 || selected[0].isJoker) {
+      showMsg('Seleziona la carta vera da mettere al posto del jolly'); return;
+    }
     const combo = room.table && room.table.find(c => c.id === comboId);
     if (!combo) return;
     const joker = combo.cards[jokerIdx];
     if (!joker || !joker.isJoker) return;
     const newComboCards = [...combo.cards];
     newComboCards[jokerIdx] = selected[0];
-    if (!isValidCombination(newComboCards)) { showMsg('Sostituzione non valida!'); return; }
+    // Validate new combo without joker
+    const result = canAddToCombo(combo.cards.filter((_, i) => i !== jokerIdx), [selected[0]]);
+    if (!result.valid) { showMsg('Sostituzione non valida!'); return; }
     await update(ref(db, 'rooms/' + roomCode), {
       ['hands/' + playerId]: myHand.filter(c => c.id !== selected[0].id).concat(joker),
-      table: room.table.map(c => c.id === comboId ? Object.assign({}, c, { cards: newComboCards }) : c),
+      table: room.table.map(c => c.id === comboId ? Object.assign({}, c, { cards: result.newCards }) : c),
     });
     setSelected([]);
-    await addLog(me.name + ' prende un jolly!');
+    await addLog(me.name + ' prende il jolly!');
   };
 
+  // CHIUSURA IN MANO
   const handleChiusura = async () => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (!room.drawnThisTurn) { showMsg('Devi prima pescare!'); return; }
     if (me.apertureUsate && me.apertureUsate.chiusura) { showMsg('Chiusura gia usata!'); return; }
-    if (selected.length !== myHand.length - 1) { showMsg('Seleziona TUTTE le carte tranne una!'); return; }
+    if (selected.length !== myHand.length - 1) {
+      showMsg('Seleziona TUTTE le carte tranne una da scartare!'); return;
+    }
     const cardToDiscard = myHand.find(c => !selected.find(sc => sc.id === c.id));
     if (cardToDiscard && cardToDiscard.isJoker) { showMsg('Non puoi scartare il jolly!'); return; }
     if (!canChiuderInMano(selected)) { showMsg('Le carte non formano combinazioni valide!'); return; }
+
     const newDiscard = [...(room.discardPile || [])];
     if (room.topDiscard) newDiscard.push(room.topDiscard);
     const scores = {};
@@ -463,6 +338,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     for (const pid of playerOrder) {
       updates['players/' + pid + '/score'] = ((players[pid] && players[pid].score) || 0) + (scores[pid] || 0);
       updates['players/' + pid + '/aperta'] = false;
+      updates['players/' + pid + '/apertaQuestoTurno'] = false;
     }
     updates['players/' + playerId + '/apertureUsate/chiusura'] = true;
     updates['hands/' + playerId] = [];
@@ -472,44 +348,47 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     updates.handScores = scores;
     updates.handWinner = playerId;
     updates.discardAvailable = false;
-    updates.discardQueue = [];
     await update(ref(db, 'rooms/' + roomCode), updates);
     setSelected([]);
     await addLog(me.name + ' chiude in mano!');
   };
 
+  // NEW HAND
   const startNewHand = async () => {
     const deck = createDeck();
     const hands = {};
     for (const pid of playerOrder) hands[pid] = deck.splice(0, 13);
-    // First card face up
     const firstCard = deck.splice(0, 1)[0];
     const updates = {
       status: 'playing', deck, discardPile: [], topDiscard: firstCard,
       table: [], currentPlayerIndex: (room.currentPlayerIndex + 1) % playerOrder.length,
       mano: (room.mano || 1) + 1, hands, drawnThisTurn: false,
       handScores: null, handWinner: null,
-      discardAvailable: false, discardQueue: [],
-      firstManoCard: true, manoCardTaken: false,
+      discardAvailable: true, firstManoCard: true,
     };
-    for (const pid of playerOrder) updates['players/' + pid + '/aperta'] = false;
+    for (const pid of playerOrder) {
+      updates['players/' + pid + '/aperta'] = false;
+      updates['players/' + pid + '/apertaQuestoTurno'] = false;
+    }
     await update(ref(db, 'rooms/' + roomCode), updates);
-    setShowScores(false); setSelected([]);
+    setShowScores(false); setSelected([]); setSelectionOrder([]);
   };
 
+  // SORT HAND
   const sortHandBySuit = async () => {
-    const sorted = sortBySuit(myHand);
-    await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: sorted });
+    await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: sortBySuit(myHand) });
   };
 
   const sortHandByValue = async () => {
-    const sorted = sortByValue(myHand);
-    await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: sorted });
+    await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: sortByValue(myHand) });
   };
 
+  // SELECT CARD
   const toggleSelect = (card) => {
     if (moveMode) {
-      setMoveSelected(prev => prev.find(c => c.id === card.id) ? prev.filter(c => c.id !== card.id) : [...prev, card]);
+      setMoveSelected(prev => prev.find(c => c.id === card.id)
+        ? prev.filter(c => c.id !== card.id)
+        : [...prev, card]);
     } else {
       setSelected(prev => {
         if (prev.find(c => c.id === card.id)) {
@@ -523,51 +402,33 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     }
   };
 
+  // MOVE CARDS (tap-tap)
   const moveCardsToPosition = async (targetIdx) => {
     if (!moveMode || moveSelected.length === 0) return;
-    // Remove selected cards from hand
     const remaining = myHand.filter(c => !moveSelected.find(m => m.id === c.id));
-    // Insert at target position
     remaining.splice(targetIdx, 0, ...moveSelected);
     await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: remaining });
     setMoveSelected([]);
     setMoveMode(false);
   };
 
-  // Touch drag and drop
-  const handleTouchStart = (e, idx) => {
-    touchRef.current = { active: true, startIdx: idx, startX: e.touches[0].clientX, startY: e.touches[0].clientY };
-  };
-
-  const handleTouchMove = (e) => {
-    if (!touchRef.current.active) return;
-    e.preventDefault();
-  };
-
-  const handleTouchEnd = async (e, idx) => {
-    if (!touchRef.current.active) return;
-    const dx = Math.abs(e.changedTouches[0].clientX - touchRef.current.startX);
-    const dy = Math.abs(e.changedTouches[0].clientY - touchRef.current.startY);
-    if (dx < 5 && dy < 5) {
-      // It was a tap, not a drag
-      touchRef.current = { active: false, startIdx: null, startX: 0, startY: 0 };
-      return;
-    }
-    const startIdx = touchRef.current.startIdx;
-    touchRef.current = { active: false, startIdx: null, startX: 0, startY: 0 };
-    if (startIdx === idx || startIdx === null) return;
+  // DRAG AND DROP (desktop)
+  const handleDragStart = (idx) => { dragRef.current.startIdx = idx; };
+  const handleDrop = async (idx) => {
+    const si = dragRef.current.startIdx;
+    dragRef.current.startIdx = null;
+    if (si === null || si === idx) return;
     const newHand = [...myHand];
-    const [moved] = newHand.splice(startIdx, 1);
+    const [moved] = newHand.splice(si, 1);
     newHand.splice(idx, 0, moved);
     await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: newHand });
   };
 
   const sortedPlayers = playerOrder.map((pid, i) => Object.assign({}, players[pid], {
-    id: pid, color: COLORS[i], handCount: ((room.hands && room.hands[pid]) || []).length,
+    id: pid, color: COLORS[i],
+    handCount: ((room.hands && room.hands[pid]) || []).length,
   }));
   const otherPlayers = sortedPlayers.filter(p => p.id !== playerId);
-  const discardQueue = room.discardQueue || [];
-  const imFirstInQueue = discardQueue[0] === playerId;
 
   return (
     <div style={s.root}>
@@ -575,7 +436,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
       <div style={s.header}>
         <span style={s.headerTitle}>POKERAMI</span>
         <span style={s.headerMano}>MANO {room.mano}</span>
-        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           <button onClick={() => setShowAperture(!showAperture)} style={s.headerBtn}>APERTURE</button>
         </div>
       </div>
@@ -603,7 +464,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
         <div style={s.aperturePanel}>
           {sortedPlayers.map(p => (
             <div key={p.id} style={s.aperturePlayerRow}>
-              <span style={{ color: p.color, fontWeight: 800, fontSize: 10, minWidth: 65 }}>
+              <span style={{ color: p.color, fontWeight: 800, fontSize: 10, minWidth: 70 }}>
                 {p.name && p.name.toUpperCase()}
               </span>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
@@ -636,7 +497,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
               borderColor: p.id === currentPid ? p.color : 'rgba(255,255,255,0.08)',
               boxShadow: p.id === currentPid ? '0 0 14px ' + p.color + '55' : 'none',
             })}>
-              <div style={{ color: p.color, fontWeight: 900, fontSize: 11, letterSpacing: 0.5 }}>
+              <div style={{ color: p.color, fontWeight: 900, fontSize: 11 }}>
                 {p.name && p.name.toUpperCase()}
               </div>
               <div style={{ display: 'flex', marginTop: 4 }}>
@@ -646,7 +507,6 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
                     background: 'linear-gradient(135deg, #0d3a5c, #071f3a)',
                     border: '1px solid rgba(255,255,255,0.12)',
                     marginLeft: i > 0 ? -7 : 0,
-                    boxShadow: '1px 2px 4px rgba(0,0,0,0.5)',
                   }} />
                 ))}
                 {p.handCount > 7 && <span style={{ color: '#4a6a7a', fontSize: 9, marginLeft: 4, alignSelf: 'center' }}>+{p.handCount - 7}</span>}
@@ -660,24 +520,24 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
         {/* Table combinations */}
         <div style={s.tableCombosArea}>
           {(!room.table || room.table.length === 0) ? (
-            <div style={{ color: '#1a3a4a', fontSize: 10, textAlign: 'center', padding: '6px 0' }}>Tavolo vuoto</div>
+            <div style={{ color: '#1a3a4a', fontSize: 10, textAlign: 'center', padding: '4px 0' }}>Tavolo vuoto</div>
           ) : (
             <div style={s.tableCombos}>
               {room.table.map(combo => (
                 <div key={combo.id} style={Object.assign({}, s.tableCombo, { borderColor: combo.color + '55' })}>
                   <div style={{ color: combo.color, fontSize: 8, fontWeight: 800, marginBottom: 4 }}>
                     {combo.playerName && combo.playerName.toUpperCase()}
-                    {combo.type !== 'libera' && ' - ' + (APERTURE_TYPES.find(a => a.id === combo.type) ? APERTURE_TYPES.find(a => a.id === combo.type).label : '')}
                   </div>
                   <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                     {combo.cards.map((card, idx) => (
-                      <div key={card.id} onClick={() => card.isJoker && isMyTurn && me.aperta ? swapJoker(combo.id, idx) : null}
+                      <div key={card.id}
+                        onClick={() => card.isJoker && isMyTurn && me.aperta ? swapJoker(combo.id, idx) : null}
                         style={{ cursor: card.isJoker && isMyTurn && me.aperta ? 'pointer' : 'default' }}>
                         <Card card={card} small />
                       </div>
                     ))}
                   </div>
-                  {isMyTurn && me.aperta && selected.length > 0 && (
+                  {canAbbassa && selected.length > 0 && (
                     <button onClick={() => addToCombo(combo.id)} style={s.addBtn}>+ AGGIUNGI</button>
                   )}
                 </div>
@@ -689,15 +549,17 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
         {/* Deck and Discard */}
         <div style={s.deckDiscardRow}>
           <div style={s.deckArea}>
-            <div style={s.deckLabel}>COPERTA ({(room.deck || []).length})</div>
+            <div style={s.deckLabel}>TALLONE ({(room.deck || []).length})</div>
             <div onClick={isMyTurn && !room.drawnThisTurn ? drawFromDeck : null}
-              style={Object.assign({}, s.deckCard, { cursor: isMyTurn && !room.drawnThisTurn ? 'pointer' : 'default',
-                boxShadow: isMyTurn && !room.drawnThisTurn ? '0 0 12px rgba(240,192,64,0.3), 2px 4px 10px rgba(0,0,0,0.5)' : '2px 4px 10px rgba(0,0,0,0.5)' })}>
+              style={Object.assign({}, s.deckCard, {
+                cursor: isMyTurn && !room.drawnThisTurn ? 'pointer' : 'default',
+                boxShadow: isMyTurn && !room.drawnThisTurn ? '0 0 12px rgba(240,192,64,0.3)' : '2px 4px 10px rgba(0,0,0,0.5)',
+              })}>
               <div style={{ fontSize: 22 }}>🂠</div>
             </div>
           </div>
           <div style={s.deckArea}>
-            <div style={s.deckLabel}>SCARTI</div>
+            <div style={s.deckLabel}>POZZO</div>
             {room.topDiscard ? (
               <div onClick={isMyTurn && !room.drawnThisTurn ? drawFromDiscard : null}
                 style={{ cursor: isMyTurn && !room.drawnThisTurn ? 'pointer' : 'default' }}>
@@ -706,96 +568,60 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
             ) : (
               <div style={s.emptyDiscard}>VUOTO</div>
             )}
-            {/* First mano card - only first player can take */}
-            {isFirstManoCard && isFirstPlayer && !room.drawnThisTurn && (
-              <button onClick={takeFirstManoCard} style={s.firstCardBtn}>PRENDI</button>
-            )}
           </div>
         </div>
       </div>
 
       {/* MY HAND */}
       <div style={s.handArea}>
-        {/* Discard notification bar - above cards */}
-        {canTakeDiscard && !imInQueue && (
-          <div style={s.discardNotif}>
-            <span style={{ color: '#c0d4e0', fontSize: 11 }}>
-              {playerOrder.length === 2
-                ? 'Puoi prendere lo scarto al tuo turno'
-                : 'Scarto disponibile! ' + (discardTimer !== null ? discardTimer + 's' : '')}
-            </span>
-            {playerOrder.length > 2 && (
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={claimDiscardFromQueue} style={s.discardBtn('#2ecc71')}>PRENDO</button>
-                <button onClick={takeDiscardOutOfTurn} style={s.discardBtn('#f39c12')}>PRENOTO</button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* In queue notification */}
-        {imInQueue && canTakeDiscard && (
-          <div style={s.discardNotif}>
-            <span style={{ color: '#f39c12', fontSize: 11 }}>
-              {imFirstInQueue ? 'Tocca a te! Vuoi lo scarto?' : 'Sei in coda (' + (discardQueue.indexOf(playerId) + 1) + ')'}
-              {discardTimer !== null && ' ' + discardTimer + 's'}
-            </span>
-            {imFirstInQueue && (
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={claimDiscardFromQueue} style={s.discardBtn('#2ecc71')}>SI</button>
-                <button onClick={passDiscardQueue} style={s.discardBtn('#e74c3c')}>NO</button>
-              </div>
-            )}
-          </div>
-        )}
-
         <div style={s.handHeader}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ color: myColor, fontWeight: 900, fontSize: 13, letterSpacing: 1 }}>
               {playerName && playerName.toUpperCase()}
             </span>
             <span style={{ color: '#4a6a7a', fontSize: 10 }}>{myHand.length} carte</span>
-            <span style={{ fontWeight: 900, fontSize: 12, color: myPoints > 50 ? '#e74c3c' : myPoints > 25 ? '#f39c12' : '#2ecc71' }}>
-              {myPoints}PT
-            </span>
+            <span style={{
+              fontWeight: 900, fontSize: 12,
+              color: myPoints > 50 ? '#e74c3c' : myPoints > 25 ? '#f39c12' : '#2ecc71',
+            }}>{myPoints}PT</span>
           </div>
-          <div style={{ display: 'flex', gap: 5 }}>
+          <div style={{ display: 'flex', gap: 4 }}>
             <button onClick={sortHandBySuit} style={s.sortBtn}>♠ SEME</button>
             <button onClick={sortHandByValue} style={s.sortBtn}>7 VALORE</button>
             <button onClick={() => { setMoveMode(!moveMode); setMoveSelected([]); setSelected([]); }}
-              style={Object.assign({}, s.sortBtn, { color: moveMode ? '#f0c040' : '#4a8fa6', border: '1px solid ' + (moveMode ? 'rgba(240,192,64,0.4)' : 'rgba(255,255,255,0.1)') })}>
+              style={Object.assign({}, s.sortBtn, {
+                color: moveMode ? '#f0c040' : '#4a8fa6',
+                border: '1px solid ' + (moveMode ? 'rgba(240,192,64,0.4)' : 'rgba(255,255,255,0.1)'),
+              })}>
               {moveMode ? 'ANNULLA' : 'SPOSTA'}
             </button>
             {!moveMode && selected.length > 0 && (
-              <button onClick={() => setSelected([])} style={s.clearBtn}>x ({selected.length})</button>
-            )}
-            {moveMode && moveSelected.length > 0 && (
-              <button onClick={() => setMoveSelected([])} style={s.clearBtn}>x ({moveSelected.length})</button>
+              <button onClick={() => { setSelected([]); setSelectionOrder([]); }} style={s.clearBtn}>
+                x ({selected.length})
+              </button>
             )}
           </div>
         </div>
 
+        {/* Hints */}
         {moveMode && (
           <div style={s.hint('#f39c12')}>
-            {moveSelected.length === 0 ? 'TOCCA LE CARTE DA SPOSTARE' : 'TOCCA LA POSIZIONE DOVE INSERIRLE (' + moveSelected.length + ' selezionate)'}
+            {moveSelected.length === 0 ? 'TOCCA LE CARTE DA SPOSTARE' : 'TOCCA LA POSIZIONE DOVE INSERIRLE'}
           </div>
         )}
-        {!moveMode && selected.length > 0 && detectedApertura && !(me.apertureUsate && me.apertureUsate[detectedApertura]) && !me.aperta && (
+        {!moveMode && selected.length > 0 && detectedApertura && !me.aperta && !(me.apertureUsate && me.apertureUsate[detectedApertura]) && (
           <div style={s.hint('#9b59b6')}>
             APERTURA: {APERTURE_TYPES.find(a => a.id === detectedApertura) ? APERTURE_TYPES.find(a => a.id === detectedApertura).label : ''}
           </div>
         )}
-        {selected.length > 0 && me.aperta && isValidTableCombination(selected) && (
+        {!moveMode && selected.length > 0 && canAbbassa && isValidTableCombination(selected) && (
           <div style={s.hint('#3498db')}>COMBINAZIONE VALIDA - puoi abbassarla!</div>
         )}
 
-        {/* Cards overlapping - touch enabled */}
+        {/* Cards */}
         <div style={s.handCards}>
           {moveMode && moveSelected.length > 0 && (
-            <div
-              onClick={() => moveCardsToPosition(0)}
-              style={s.insertSlot}
-            />
+            <div onClick={() => moveCardsToPosition(0)} style={s.insertSlot} />
           )}
           {myHand.map((card, idx) => {
             const isSelected = !!selected.find(c => c.id === card.id);
@@ -804,24 +630,13 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
               <React.Fragment key={card.id}>
                 <div
                   draggable
-                  onDragStart={() => touchRef.current.startIdx = idx}
+                  onDragStart={() => handleDragStart(idx)}
                   onDragOver={(e) => e.preventDefault()}
-                  onDrop={async () => {
-                    const si = touchRef.current.startIdx;
-                    if (si === null || si === idx) return;
-                    const newHand = [...myHand];
-                    const [moved] = newHand.splice(si, 1);
-                    newHand.splice(idx, 0, moved);
-                    touchRef.current.startIdx = null;
-                    await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: newHand });
-                  }}
-                  onTouchStart={(e) => handleTouchStart(e, idx)}
-                  onTouchMove={handleTouchMove}
-                  onTouchEnd={(e) => handleTouchEnd(e, idx)}
+                  onDrop={() => handleDrop(idx)}
                   onClick={() => toggleSelect(card)}
                   style={{
                     marginLeft: idx === 0 ? 0 : (moveMode ? 4 : -24),
-                    zIndex: isMoveSelected ? 100 : isSelected ? 90 : idx,
+                    zIndex: isMoveSelected || isSelected ? 100 : idx,
                     position: 'relative',
                     transition: 'margin 0.1s',
                     opacity: isMoveSelected ? 0.5 : 1,
@@ -830,10 +645,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
                   <Card card={card} selected={isMoveSelected || (!moveMode && isSelected)} />
                 </div>
                 {moveMode && moveSelected.length > 0 && !isMoveSelected && (
-                  <div
-                    onClick={() => moveCardsToPosition(idx + 1)}
-                    style={s.insertSlot}
-                  />
+                  <div onClick={() => moveCardsToPosition(idx + 1)} style={s.insertSlot} />
                 )}
               </React.Fragment>
             );
@@ -867,12 +679,14 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
           ) : (
             <React.Fragment>
               {!me.aperta && selected.length > 0 && detectedApertura && !(me.apertureUsate && me.apertureUsate[detectedApertura]) && (
-                <button onClick={handleApertura} style={s.actionBtn('#9b59b6', null)}>APRI</button>
+                <button onClick={handleApertura} style={s.actionBtn('#9b59b6', null)}>
+                  APRI: {APERTURE_TYPES.find(a => a.id === detectedApertura) ? APERTURE_TYPES.find(a => a.id === detectedApertura).label : ''}
+                </button>
               )}
-              {me.aperta && selected.length > 0 && isValidTableCombination(selected) && (
-                <button onClick={handleAbbassCombinazione} style={s.actionBtn('#3498db', null)}>ABBASSA</button>
+              {canAbbassa && selected.length > 0 && isValidTableCombination(selected) && (
+                <button onClick={() => handleAbbassa()} style={s.actionBtn('#2ecc71', null)}>ABBASSA</button>
               )}
-              {selected.length === myHand.length - 1 && (
+              {selected.length === myHand.length - 1 && !(me.apertureUsate && me.apertureUsate.chiusura) && (
                 <button onClick={handleChiusura} style={s.actionBtn('#f0c040', '#061a26')}>CHIUDI</button>
               )}
               <button onClick={discardCard} style={s.actionBtn('#e74c3c', null)}>SCARTA</button>
@@ -881,12 +695,10 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
         </div>
       )}
 
-      {/* CHAT - always visible below hand */}
+      {/* CHAT */}
       <div style={s.chatArea}>
         <div ref={chatRef} style={s.chatMessages}>
-          {(room.chatMessages || []).length === 0 ? (
-            <div style={{ color: '#1a3a4a', fontSize: 10, padding: '4px 0' }}>Nessun messaggio</div>
-          ) : (room.chatMessages || []).slice(-5).map(m => (
+          {(room.chatMessages || []).slice(-4).map(m => (
             <div key={m.id} style={s.chatMsg}>
               <span style={{ color: '#f0c040', fontWeight: 800 }}>{m.name}: </span>
               <span style={{ color: '#c0d4e0' }}>{m.text}</span>
@@ -902,26 +714,25 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
         </div>
       </div>
 
-      {/* JOKER DECLARATION MODAL */}
+      {/* JOKER MODAL */}
       {jokerModal && (
         <div style={s.modalOverlay}>
-          <div style={Object.assign({}, s.modal, { maxWidth: 300, textAlign: 'center' })}>
+          <div style={Object.assign({}, s.modal, { maxWidth: 280, textAlign: 'center' })}>
             <h3 style={{ color: '#f0c040', margin: '0 0 8px', fontSize: 16, letterSpacing: 2 }}>DICHIARA IL JOLLY</h3>
-            <p style={{ color: '#4a6a7a', fontSize: 12, marginBottom: 16 }}>Quale seme rappresenta il jolly?</p>
+            <p style={{ color: '#4a6a7a', fontSize: 12, marginBottom: 16 }}>Quale seme rappresenta?</p>
             <div style={{ display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap' }}>
               {jokerModal.suits.map(suit => (
                 <button key={suit} onClick={() => jokerModal.onConfirm(suit)} style={{
-                  padding: '12px 16px', borderRadius: 10, border: 'none',
-                  background: (suit === '♥' || suit === '♦') ? 'rgba(192,57,43,0.2)' : 'rgba(26,26,46,0.5)',
-                  color: (suit === '♥' || suit === '♦') ? '#e74c3c' : '#e0eaf4',
-                  fontSize: 28, cursor: 'pointer',
-                  border: '1px solid rgba(255,255,255,0.15)',
+                  padding: '12px 16px', borderRadius: 10,
+                  background: (suit === '\u2665' || suit === '\u2666') ? 'rgba(192,57,43,0.2)' : 'rgba(26,26,46,0.5)',
+                  color: (suit === '\u2665' || suit === '\u2666') ? '#e74c3c' : '#e0eaf4',
+                  fontSize: 28, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.15)',
                 }}>
                   {suit}
                 </button>
               ))}
             </div>
-            <button onClick={() => setJokerModal(null)} style={{ marginTop: 16, background: 'transparent', border: 'none', color: '#4a6a7a', cursor: 'pointer', fontSize: 12, fontFamily: 'Georgia, serif' }}>
+            <button onClick={() => setJokerModal(null)} style={{ marginTop: 16, background: 'transparent', border: 'none', color: '#4a6a7a', cursor: 'pointer', fontSize: 12 }}>
               ANNULLA
             </button>
           </div>
@@ -964,12 +775,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
 }
 
 const s = {
-  root: {
-    minHeight: '100vh',
-    background: 'linear-gradient(180deg, #061a26 0%, #0a2e3d 40%, #061a26 100%)',
-    fontFamily: 'Georgia, serif', color: '#e0eaf4',
-    display: 'flex', flexDirection: 'column', userSelect: 'none',
-  },
+  root: { minHeight: '100vh', background: 'linear-gradient(180deg, #061a26 0%, #0a2e3d 40%, #061a26 100%)', fontFamily: 'Georgia, serif', color: '#e0eaf4', display: 'flex', flexDirection: 'column', userSelect: 'none' },
   loading: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#061a26', color: '#f0c040', fontSize: 18, letterSpacing: 3 },
   header: { background: 'rgba(0,0,0,0.6)', borderBottom: '1px solid rgba(255,255,255,0.05)', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 },
   headerTitle: { color: '#f0c040', fontWeight: 900, fontSize: 16, letterSpacing: 4 },
@@ -991,20 +797,17 @@ const s = {
   deckLabel: { color: '#2a5a6a', fontSize: 9, letterSpacing: 1, marginBottom: 4 },
   deckCard: { width: 58, height: 84, borderRadius: 7, background: 'linear-gradient(135deg, #0d3a5c, #071f3a)', border: '1.5px solid rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   emptyDiscard: { width: 58, height: 84, borderRadius: 7, border: '2px dashed rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1a3a4a', fontSize: 9 },
-  firstCardBtn: { marginTop: 4, padding: '4px 8px', borderRadius: 5, background: 'rgba(240,192,64,0.15)', border: '1px solid rgba(240,192,64,0.4)', color: '#f0c040', fontSize: 9, cursor: 'pointer', width: '100%', fontFamily: 'Georgia, serif', fontWeight: 800 },
-  handArea: { flex: 1, background: '#051520', padding: '8px 12px 0', borderTop: '2px solid rgba(10,100,140,0.25)' },
-  discardNotif: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, padding: '6px 10px', marginBottom: 6 },
-  discardBtn: (color) => ({ padding: '4px 10px', borderRadius: 6, border: 'none', background: color + '22', color: color, fontWeight: 800, fontSize: 10, cursor: 'pointer', letterSpacing: 1, fontFamily: 'Georgia, serif', border: '1px solid ' + color + '44' }),
+  handArea: { flex: 1, background: '#051520', padding: '10px 12px 0', borderTop: '2px solid rgba(10,100,140,0.25)' },
   handHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 },
   hint: (color) => ({ background: color + '12', border: '1px solid ' + color + '35', borderRadius: 5, padding: '3px 8px', color: color, fontSize: 9, letterSpacing: 1, fontWeight: 800, marginBottom: 5 }),
   handCards: { display: 'flex', flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: 12, paddingTop: 4, minHeight: 96 },
+  insertSlot: { width: 14, height: 84, borderRadius: 4, background: 'rgba(240,192,64,0.15)', border: '2px dashed rgba(240,192,64,0.5)', cursor: 'pointer', flexShrink: 0, alignSelf: 'flex-start', marginTop: 6 },
   sortBtn: { background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#4a8fa6', borderRadius: 5, padding: '3px 7px', fontSize: 8, cursor: 'pointer', letterSpacing: 0.5, fontFamily: 'Georgia, serif' },
   clearBtn: { background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: '#4a6a7a', borderRadius: 5, padding: '3px 7px', fontSize: 8, cursor: 'pointer', fontFamily: 'Georgia, serif' },
-  insertSlot: { width: 12, height: 84, borderRadius: 4, background: 'rgba(240,192,64,0.2)', border: '2px dashed rgba(240,192,64,0.5)', cursor: 'pointer', flexShrink: 0, alignSelf: 'flex-start', marginTop: 6, transition: 'background 0.15s' },
   actions: { padding: '8px 12px 10px', background: 'rgba(0,0,0,0.5)', borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', gap: 8, flexWrap: 'wrap' },
-  actionBtn: (color, textColor) => ({ flex: 1, padding: '11px 8px', borderRadius: 9, border: textColor ? 'none' : '1px solid ' + color + '44', background: textColor ? 'linear-gradient(135deg, ' + color + ', ' + color + 'cc)' : color + '18', color: textColor || color, fontWeight: 900, fontSize: 12, cursor: 'pointer', letterSpacing: 1, fontFamily: 'Georgia, serif' }),
+  actionBtn: (color, textColor) => ({ flex: 1, padding: '11px 8px', borderRadius: 9, border: textColor ? 'none' : '1px solid ' + color + '44', background: textColor ? 'linear-gradient(135deg, ' + color + ', ' + color + 'cc)' : color + '18', color: textColor || color, fontWeight: 900, fontSize: 11, cursor: 'pointer', letterSpacing: 1, fontFamily: 'Georgia, serif' }),
   chatArea: { background: 'rgba(0,0,0,0.35)', borderTop: '1px solid rgba(255,255,255,0.05)', padding: '6px 12px 16px' },
-  chatMessages: { overflowY: 'auto', maxHeight: 60, marginBottom: 5 },
+  chatMessages: { overflowY: 'auto', maxHeight: 55, marginBottom: 5 },
   chatMsg: { fontSize: 11, marginBottom: 2, lineHeight: 1.4 },
   chatInput: { display: 'flex', gap: 5 },
   chatInputField: { flex: 1, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 7, padding: '5px 8px', color: '#fff', fontSize: 12, outline: 'none', fontFamily: 'Georgia, serif' },
