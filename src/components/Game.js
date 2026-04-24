@@ -342,7 +342,26 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
       }
     }
     const newCards = [...combo.cards, ...cardsToAdd];
-    if (!isValidCombination(newCards)) { showMsg('Combinazione non valida!'); return; }
+    // After opening, just check if resulting cards are valid - no type restriction
+    const allNonJokers = newCards.filter(c => !c.isJoker);
+    const allSameRank = allNonJokers.every(c => c.rank === allNonJokers[0].rank);
+    const allSameSuit = allNonJokers.every(c => c.suit === allNonJokers[0].suit);
+    const noDupSuits = new Set(allNonJokers.map(c => c.suit)).size === allNonJokers.length;
+    const jokerCount = newCards.filter(c => c.isJoker).length;
+
+    let valid = false;
+    if (jokerCount <= 1) {
+      // Tris/Poker: same rank, no duplicate suits, 2-4 cards
+      if (allSameRank && noDupSuits && newCards.length >= 2 && newCards.length <= 4) valid = true;
+      // Scala: same suit, sequential
+      if (allSameSuit && newCards.length >= 3) {
+        const orders = allNonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
+        let gaps = 0;
+        for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i-1] - 1;
+        if (gaps <= jokerCount) valid = true;
+      }
+    }
+    if (!valid) { showMsg('Combinazione non valida!'); return; }
     await update(ref(db, 'rooms/' + roomCode), {
       ['hands/' + playerId]: myHand.filter(c => !selected.find(sc => sc.id === c.id)),
       table: room.table.map(c => c.id === comboId ? Object.assign({}, c, { cards: newCards }) : c),
