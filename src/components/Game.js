@@ -182,13 +182,38 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     if (me.apertureUsate && me.apertureUsate[aperturaId]) {
       showMsg('Apertura gia usata in una partita precedente!'); return;
     }
-    const sorted = sortForTable(selected);
     const newHand = myHand.filter(c => !selected.find(sc => sc.id === c.id));
-    const newTable = [...(room.table || []), {
-      id: Date.now().toString(), playerId,
-      playerName: me.name, color: myColor,
-      cards: sorted,
-    }];
+    // Split mixed combos (doppia coppia, full) into separate groups on table
+    const nonJokers = selected.filter(c => !c.isJoker);
+    const allSameSuit = nonJokers.every(c => c.suit === nonJokers[0].suit);
+    const allSameRank = nonJokers.every(c => c.rank === nonJokers[0].rank);
+    const isMixed = !allSameSuit && !allSameRank;
+
+    let newCombos = [];
+    if (isMixed) {
+      // Group by rank and create separate combos
+      const rankGroups = {};
+      nonJokers.forEach(c => {
+        if (!rankGroups[c.rank]) rankGroups[c.rank] = [];
+        rankGroups[c.rank].push(c);
+      });
+      Object.values(rankGroups).forEach(group => {
+        const suitOrder = { '♠': 0, '♥': 1, '♦': 2, '♣': 3 };
+        const sorted = [...group].sort((a, b) => (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0));
+        newCombos.push({
+          id: Date.now().toString() + Math.random(),
+          playerId, playerName: me.name, color: myColor,
+          cards: sorted,
+        });
+      });
+    } else {
+      newCombos.push({
+        id: Date.now().toString(), playerId,
+        playerName: me.name, color: myColor,
+        cards: sortForTable(selected),
+      });
+    }
+    const newTable = [...(room.table || []), ...newCombos];
     const updates = {};
     updates['hands/' + playerId] = newHand;
     updates['players/' + playerId + '/apertureUsate/' + aperturaId] = true;
@@ -257,11 +282,37 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     }
 
     const newHand = myHand.filter(c => !selected.find(sc => sc.id === c.id));
-    const newTable = [...(room.table || []), {
-      id: Date.now().toString(), playerId,
-      playerName: me.name, color: myColor,
-      cards: cardsToPlay,
-    }];
+    // Split mixed combos into separate groups
+    const playNonJokers = cardsToPlay.filter(c => !c.isJoker);
+    const playAllSameSuit = playNonJokers.every(c => c.suit === playNonJokers[0].suit);
+    const playAllSameRank = playNonJokers.every(c => c.rank === playNonJokers[0].rank);
+    const playIsMixed = !playAllSameSuit && !playAllSameRank;
+
+    let newCombos = [];
+    if (playIsMixed) {
+      const rankGroups = {};
+      playNonJokers.forEach(c => {
+        if (!rankGroups[c.rank]) rankGroups[c.rank] = [];
+        rankGroups[c.rank].push(c);
+      });
+      const suitOrder = { '♠': 0, '♥': 1, '♦': 2, '♣': 3 };
+      Object.values(rankGroups).forEach(group => {
+        const sorted = [...group].sort((a, b) => (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0));
+        newCombos.push({
+          id: Date.now().toString() + Math.random(),
+          playerId, playerName: me.name, color: myColor,
+          cards: sorted,
+        });
+      });
+    } else {
+      newCombos.push({
+        id: Date.now().toString(), playerId,
+        playerName: me.name, color: myColor,
+        cards: cardsToPlay,
+      });
+    }
+
+    const newTable = [...(room.table || []), ...newCombos];
     await update(ref(db, 'rooms/' + roomCode), {
       ['hands/' + playerId]: newHand,
       table: newTable,
