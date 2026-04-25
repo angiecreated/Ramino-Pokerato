@@ -499,11 +499,11 @@ export function canAddToCombo(existingCards, newCards) {
 
   // Joker alone on mixed combo
   if (newCards.length === 1 && newCards[0].isJoker && allJokers.length === 1) {
-    return { valid: true, newCards: allCards };
+    return { valid: true, newCards: sortForTable(allCards) };
   }
 
   if (newNonJokers.length > 0) {
-    return { valid: true, newCards: allCards };
+    return { valid: true, newCards: sortForTable(allCards) };
   }
 
   return { valid: false, reason: 'Combinazione non valida!' };

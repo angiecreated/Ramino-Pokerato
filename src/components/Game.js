@@ -328,8 +328,8 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     await addLog(me.name + ' aggiunge carte al tavolo.');
   };
 
-  // SWAP JOKER
-  const swapJoker = async (comboId, jokerIdx, declaredSuit) => {
+  // SWAP JOKER - show modal to ask where to use the joker
+  const swapJoker = async (comboId, jokerIdx) => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (!me.aperta) { showMsg('Devi prima aprire!'); return; }
     if (selected.length !== 1 || selected[0].isJoker) {
@@ -345,8 +345,14 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     const result = canAddToCombo(comboWithoutJoker, [selected[0]]);
     if (!result.valid) { showMsg('Sostituzione non valida!'); return; }
 
-    // Now the joker goes to hand - but needs declaration for where it will be used
-    // Just give player the joker without declaration (they will declare when they use it)
+    // Joker goes to hand - ask player where they want to use it
+    // Show modal with available combos on table that accept a joker
+    const availableCombos = (room.table || []).filter(c => {
+      if (c.id === comboId) return false; // not the same combo
+      if (comboHasJoker(c)) return false; // already has joker
+      return true;
+    });
+
     const newJoker = Object.assign({}, joker, { declaredAs: null });
     const newHand = myHand.filter(c => c.id !== selected[0].id).concat(newJoker);
 
@@ -355,6 +361,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
       table: room.table.map(c => c.id === comboId ? Object.assign({}, c, { cards: result.newCards }) : c),
     });
     setSelected([]);
+    showMsg('Hai preso il jolly! Usalo in una combinazione.', 'success');
     await addLog(me.name + ' prende il jolly!');
   };
 
