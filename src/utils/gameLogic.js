@@ -112,26 +112,40 @@ export function sortByValue(cards) {
   });
 }
 
-// Sort cards for display on table (scala: by rank; tris/poker: by suit)
+// Sort cards for display on table
 export function sortForTable(cards) {
   const nonJokers = cards.filter(c => !c.isJoker);
   const jokers = cards.filter(c => c.isJoker);
   if (nonJokers.length === 0) return cards;
 
   const allSameSuit = nonJokers.every(c => c.suit === nonJokers[0].suit);
+  const allSameRank = nonJokers.every(c => c.rank === nonJokers[0].rank);
+
   if (allSameSuit) {
-    // Scala - sort by rank
-    const sorted = nonJokers.sort((a, b) => RANK_ORDER[a.rank] - RANK_ORDER[b.rank]);
-    // Insert joker in the gap
-    if (jokers.length > 0) {
-      const withJoker = insertJokerInGap(sorted, jokers[0]);
-      return withJoker;
-    }
+    // Scala - sort by rank, insert joker in gap
+    const sorted = [...nonJokers].sort((a, b) => RANK_ORDER[a.rank] - RANK_ORDER[b.rank]);
+    if (jokers.length > 0) return insertJokerInGap(sorted, jokers[0]);
     return sorted;
-  } else {
+  } else if (allSameRank) {
     // Tris/Poker - sort by suit
     const suitOrder = { '\u2660': 0, '\u2665': 1, '\u2666': 2, '\u2663': 3 };
-    const sorted = nonJokers.sort((a, b) => (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0));
+    const sorted = [...nonJokers].sort((a, b) => (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0));
+    return [...sorted, ...jokers];
+  } else {
+    // Mixed combo (full, doppia coppia) - group by rank, keep groups together
+    const rankGroups = {};
+    const rankOrder = [];
+    nonJokers.forEach(c => {
+      if (!rankGroups[c.rank]) { rankGroups[c.rank] = []; rankOrder.push(c.rank); }
+      rankGroups[c.rank].push(c);
+    });
+    // Sort each group by suit
+    const suitOrder = { '\u2660': 0, '\u2665': 1, '\u2666': 2, '\u2663': 3 };
+    const sorted = [];
+    rankOrder.forEach(rank => {
+      const group = rankGroups[rank].sort((a, b) => (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0));
+      sorted.push(...group);
+    });
     return [...sorted, ...jokers];
   }
 }
@@ -401,26 +415,35 @@ export function canAddToCombo(existingCards, newCards) {
     existingNonJokers.every(c => c.rank === existingNonJokers[0].rank);
 
   if (isScala) {
-    // All cards must be same suit
-    if (!allNonJokers.every(c => c.suit === existingNonJokers[0].suit)) {
+    const scalaSuit = existingNonJokers[0].suit;
+    // All new non-joker cards must be same suit as scala
+    if (!newNonJokers.every(c => c.suit === scalaSuit)) {
       return { valid: false, reason: 'Le carte devono essere dello stesso seme della scala!' };
     }
-    // No duplicate ranks
+    // No duplicate ranks in all non-jokers
     const orders = allNonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
     if (new Set(orders).size !== orders.length) {
       return { valid: false, reason: 'Rank duplicato nella scala!' };
     }
-    // Check sequential with max 1 joker gap
+    // Check sequential - with 1 joker allowed in one gap
     let gaps = 0;
     for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i - 1] - 1;
     if (gaps > jokerCount) {
       return { valid: false, reason: 'Le carte non sono in sequenza!' };
     }
+    // Also check asso in valid position (A-2-3 or Q-K-A)
+    if (allNonJokers.some(c => c.rank === 'A')) {
+      const hasLow = orders[0] === 1 && orders[1] <= 3;
+      const hasHigh = orders[orders.length - 1] === 1 || orders[orders.length - 2] >= 12;
+      if (!hasLow && !hasHigh && orders[0] === 1) {
+        return { valid: false, reason: 'L asso va solo in scale alte (Q-K-A) o basse (A-2-3)!' };
+      }
+    }
     // Max 2 cards added to existing scala
-    if (newNonJokers.length + (newCards.some(c => c.isJoker) ? 1 : 0) > 2) {
+    const addedCount = newNonJokers.length + (newCards.some(c => c.isJoker) ? 1 : 0);
+    if (addedCount > 2) {
       return { valid: false, reason: 'Puoi aggiungere massimo 2 carte a una scala!' };
     }
-    // Sort and return
     const sorted = sortForTable(allCards);
     return { valid: true, newCards: sorted };
   }

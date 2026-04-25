@@ -118,18 +118,53 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     if (selected.length !== 1) { showMsg('Seleziona UNA carta da scartare'); return; }
     const card = selected[0];
     if (card.isJoker) { showMsg('Non puoi scartare il jolly!'); return; }
+
+    // Check if card can be added to any table combo (only if already opened)
+    if (me.aperta && !me.apertaQuestoTurno) {
+      const table = room.table || [];
+      const canAdd = table.some(combo => {
+        const result = canAddToCombo(combo.cards, [card]);
+        return result.valid;
+      });
+      if (canAdd) {
+        showMsg('Non puoi scartare questa carta - puoi aggiungerla al tavolo!');
+        return;
+      }
+    }
+
+    const newHand = myHand.filter(c => c.id !== card.id);
     const newDiscard = [...(room.discardPile || [])];
     if (room.topDiscard) newDiscard.push(room.topDiscard);
     const nextIndex = (room.currentPlayerIndex + 1) % playerOrder.length;
-    await update(ref(db, 'rooms/' + roomCode), {
-      ['hands/' + playerId]: myHand.filter(c => c.id !== card.id),
+
+    const updates = {
+      ['hands/' + playerId]: newHand,
       discardPile: newDiscard,
       topDiscard: card,
       currentPlayerIndex: nextIndex,
       drawnThisTurn: false,
       discardAvailable: true,
       ['players/' + playerId + '/apertaQuestoTurno']: false,
-    });
+    };
+
+    // Auto-close if player has 0 cards after discard
+    if (newHand.length === 0) {
+      const scores = {};
+      for (const pid of playerOrder) {
+        scores[pid] = pid === playerId ? 0 : handPoints((room.hands && room.hands[pid]) || []);
+      }
+      for (const pid of playerOrder) {
+        updates['players/' + pid + '/score'] = ((players[pid] && players[pid].score) || 0) + (scores[pid] || 0);
+        updates['players/' + pid + '/aperta'] = false;
+        updates['players/' + pid + '/apertaQuestoTurno'] = false;
+      }
+      updates.status = 'handEnd';
+      updates.handScores = scores;
+      updates.handWinner = playerId;
+      updates.discardAvailable = false;
+    }
+
+    await update(ref(db, 'rooms/' + roomCode), updates);
     setSelected([]);
     setSelectionOrder([]);
     await addLog(me.name + ' scarta ' + card.rank + card.suit);
@@ -293,7 +328,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
   };
 
   // SWAP JOKER
-  const swapJoker = async (comboId, jokerIdx) => {
+  const swapJoker = async (comboId, jokerIdx, declaredSuit) => {
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (!me.aperta) { showMsg('Devi prima aprire!'); return; }
     if (selected.length !== 1 || selected[0].isJoker) {
@@ -303,13 +338,19 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     if (!combo) return;
     const joker = combo.cards[jokerIdx];
     if (!joker || !joker.isJoker) return;
-    const newComboCards = [...combo.cards];
-    newComboCards[jokerIdx] = selected[0];
-    // Validate new combo without joker
-    const result = canAddToCombo(combo.cards.filter((_, i) => i !== jokerIdx), [selected[0]]);
+
+    // Validate swap
+    const comboWithoutJoker = combo.cards.filter((_, i) => i !== jokerIdx);
+    const result = canAddToCombo(comboWithoutJoker, [selected[0]]);
     if (!result.valid) { showMsg('Sostituzione non valida!'); return; }
+
+    // Now the joker goes to hand - but needs declaration for where it will be used
+    // Just give player the joker without declaration (they will declare when they use it)
+    const newJoker = Object.assign({}, joker, { declaredAs: null });
+    const newHand = myHand.filter(c => c.id !== selected[0].id).concat(newJoker);
+
     await update(ref(db, 'rooms/' + roomCode), {
-      ['hands/' + playerId]: myHand.filter(c => c.id !== selected[0].id).concat(joker),
+      ['hands/' + playerId]: newHand,
       table: room.table.map(c => c.id === comboId ? Object.assign({}, c, { cards: result.newCards }) : c),
     });
     setSelected([]);
@@ -321,6 +362,37 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     if (!isMyTurn) { showMsg('Non e il tuo turno!'); return; }
     if (!room.drawnThisTurn) { showMsg('Devi prima pescare!'); return; }
     if (me.apertureUsate && me.apertureUsate.chiusura) { showMsg('Chiusura gia usata!'); return; }
+
+    // Special case: 1 card in hand - can close by discarding it
+    if (myHand.length === 1) {
+      const card = myHand[0];
+      if (card.isJoker) { showMsg('Non puoi scartare il jolly!'); return; }
+      const newDiscard = [...(room.discardPile || [])];
+      if (room.topDiscard) newDiscard.push(room.topDiscard);
+      const scores = {};
+      for (const pid of playerOrder) {
+        scores[pid] = pid === playerId ? 0 : handPoints((room.hands && room.hands[pid]) || []);
+      }
+      const updates = {};
+      for (const pid of playerOrder) {
+        updates['players/' + pid + '/score'] = ((players[pid] && players[pid].score) || 0) + (scores[pid] || 0);
+        updates['players/' + pid + '/aperta'] = false;
+        updates['players/' + pid + '/apertaQuestoTurno'] = false;
+      }
+      updates['players/' + playerId + '/apertureUsate/chiusura'] = true;
+      updates['hands/' + playerId] = [];
+      updates.discardPile = newDiscard;
+      updates.topDiscard = card;
+      updates.status = 'handEnd';
+      updates.handScores = scores;
+      updates.handWinner = playerId;
+      updates.discardAvailable = false;
+      await update(ref(db, 'rooms/' + roomCode), updates);
+      setSelected([]);
+      await addLog(me.name + ' chiude in mano!');
+      return;
+    }
+
     if (selected.length !== myHand.length - 1) {
       showMsg('Seleziona TUTTE le carte tranne una da scartare!'); return;
     }
