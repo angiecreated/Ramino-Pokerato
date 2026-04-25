@@ -119,8 +119,9 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     const card = selected[0];
     if (card.isJoker) { showMsg('Non puoi scartare il jolly!'); return; }
 
-    // Check if card can be added to any table combo (only if already opened)
-    if (me.aperta && !me.apertaQuestoTurno) {
+    // Check if card can be added to any table combo (if already opened)
+    // Even if opened this turn, cannot discard a card that goes to table
+    if (me.aperta) {
       const table = room.table || [];
       const canAdd = table.some(combo => {
         const result = canAddToCombo(combo.cards, [card]);

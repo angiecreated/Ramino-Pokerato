@@ -132,18 +132,25 @@ export function sortForTable(cards) {
     const sorted = [...nonJokers].sort((a, b) => (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0));
     return [...sorted, ...jokers];
   } else {
-    // Mixed combo (full, doppia coppia) - group by rank, keep groups together
+    // Mixed combo (full, doppia coppia) - group by rank
     const rankGroups = {};
-    const rankOrder = [];
     nonJokers.forEach(c => {
-      if (!rankGroups[c.rank]) { rankGroups[c.rank] = []; rankOrder.push(c.rank); }
+      if (!rankGroups[c.rank]) rankGroups[c.rank] = [];
       rankGroups[c.rank].push(c);
     });
-    // Sort each group by suit
+    // Sort ranks: larger groups first (tris before coppia), then by rank value descending
     const suitOrder = { '\u2660': 0, '\u2665': 1, '\u2666': 2, '\u2663': 3 };
+    const sortedRanks = Object.keys(rankGroups).sort((a, b) => {
+      // Larger group first
+      if (rankGroups[b].length !== rankGroups[a].length) {
+        return rankGroups[b].length - rankGroups[a].length;
+      }
+      // Same size: higher rank first
+      return (RANK_ORDER[b] || 0) - (RANK_ORDER[a] || 0);
+    });
     const sorted = [];
-    rankOrder.forEach(rank => {
-      const group = rankGroups[rank].sort((a, b) => (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0));
+    sortedRanks.forEach(rank => {
+      const group = [...rankGroups[rank]].sort((a, b) => (suitOrder[a.suit] || 0) - (suitOrder[b.suit] || 0));
       sorted.push(...group);
     });
     return [...sorted, ...jokers];
