@@ -23,6 +23,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
   const [jokerModal, setJokerModal] = useState(null);
   const [moveMode, setMoveMode] = useState(false);
   const [moveSelected, setMoveSelected] = useState([]);
+  const [showTabella, setShowTabella] = useState(false);
   const chatRef = useRef(null);
   const dragRef = useRef({ startIdx: null });
 
@@ -569,6 +570,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
         <span style={s.headerMano}>MANO {room.mano}</span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           <button onClick={() => setShowAperture(!showAperture)} style={s.headerBtn}>APERTURE</button>
+          <button onClick={() => setShowTabella(!showTabella)} style={s.headerBtn}>TABELLA</button>
         </div>
       </div>
 
@@ -621,29 +623,22 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
 
       {/* TABLE AREA */}
       <div style={s.tableArea}>
-        {/* Other players */}
+        {/* Other players - simplified */}
         <div style={s.otherPlayersRow}>
           {otherPlayers.map(p => (
             <div key={p.id} style={Object.assign({}, s.otherPlayerChip, {
               borderColor: p.id === currentPid ? p.color : 'rgba(255,255,255,0.08)',
               boxShadow: p.id === currentPid ? '0 0 14px ' + p.color + '55' : 'none',
             })}>
-              <div style={{ color: p.color, fontWeight: 900, fontSize: 11 }}>
+              <span style={{ color: p.color, fontWeight: 900, fontSize: 13, letterSpacing: 1 }}>
                 {p.name && p.name.toUpperCase()}
-              </div>
-              <div style={{ display: 'flex', marginTop: 4 }}>
-                {Array.from({ length: Math.min(p.handCount, 7) }).map((_, i) => (
-                  <div key={i} style={{
-                    width: 18, height: 26, borderRadius: 3,
-                    background: 'linear-gradient(135deg, #0d3a5c, #071f3a)',
-                    border: '1px solid rgba(255,255,255,0.12)',
-                    marginLeft: i > 0 ? -7 : 0,
-                  }} />
-                ))}
-                {p.handCount > 7 && <span style={{ color: '#4a6a7a', fontSize: 9, marginLeft: 4, alignSelf: 'center' }}>+{p.handCount - 7}</span>}
-              </div>
-              <div style={{ color: '#f0c040', fontSize: 10, fontWeight: 800, marginTop: 3 }}>{p.score}pt</div>
-              {p.aperta && <div style={{ color: p.color, fontSize: 8 }}>APERTO</div>}
+              </span>
+              <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, marginLeft: 6 }}>
+                {p.handCount} carte
+              </span>
+              {p.aperta && (
+                <span style={{ color: p.color, fontSize: 9, marginLeft: 6, opacity: 0.8 }}>APERTO</span>
+              )}
             </div>
           ))}
         </div>
@@ -684,7 +679,13 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
             <div onClick={isMyTurn && !room.drawnThisTurn ? drawFromDeck : null}
               style={Object.assign({}, s.deckCard, {
                 cursor: isMyTurn && !room.drawnThisTurn ? 'pointer' : 'default',
-                boxShadow: isMyTurn && !room.drawnThisTurn ? '0 0 12px rgba(240,192,64,0.3)' : '2px 4px 10px rgba(0,0,0,0.5)',
+                boxShadow: isMyTurn && !room.drawnThisTurn
+                  ? '0 0 20px rgba(240,192,64,0.7), 0 0 40px rgba(240,192,64,0.3), 2px 4px 10px rgba(0,0,0,0.5)'
+                  : '2px 4px 10px rgba(0,0,0,0.5)',
+                border: isMyTurn && !room.drawnThisTurn
+                  ? '2px solid rgba(240,192,64,0.8)'
+                  : '1.5px solid rgba(255,255,255,0.15)',
+                transition: 'box-shadow 0.3s, border 0.3s',
               })}>
               <div style={{ fontSize: 22 }}>🂠</div>
             </div>
@@ -692,8 +693,18 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
           <div style={s.deckArea}>
             <div style={s.deckLabel}>POZZO</div>
             {room.topDiscard ? (
-              <div onClick={isMyTurn && !room.drawnThisTurn ? drawFromDiscard : null}
-                style={{ cursor: isMyTurn && !room.drawnThisTurn ? 'pointer' : 'default' }}>
+              <div
+                onClick={isMyTurn && !room.drawnThisTurn ? drawFromDiscard : null}
+                style={{
+                  cursor: isMyTurn && !room.drawnThisTurn ? 'pointer' : 'default',
+                  borderRadius: 7,
+                  boxShadow: isMyTurn && room.drawnThisTurn
+                    ? '0 0 20px rgba(46,204,113,0.7), 0 0 40px rgba(46,204,113,0.3)'
+                    : isMyTurn && !room.drawnThisTurn
+                      ? '0 0 16px rgba(240,192,64,0.5)'
+                      : 'none',
+                  transition: 'box-shadow 0.3s',
+                }}>
                 <Card card={room.topDiscard} />
               </div>
             ) : (
@@ -704,7 +715,11 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
       </div>
 
       {/* MY HAND */}
-      <div style={s.handArea}>
+      <div style={Object.assign({}, s.handArea, {
+        borderTop: isMyTurn ? '2px solid #f0c040' : '2px solid rgba(10,100,140,0.25)',
+        boxShadow: isMyTurn ? '0 -4px 20px rgba(240,192,64,0.25), inset 0 2px 10px rgba(240,192,64,0.08)' : 'none',
+        transition: 'border-color 0.3s, box-shadow 0.3s',
+      })}>
         <div style={s.handHeader}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ color: myColor, fontWeight: 900, fontSize: 13, letterSpacing: 1 }}>
@@ -717,8 +732,8 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
             }}>{myPoints}PT</span>
           </div>
           <div style={{ display: 'flex', gap: 4 }}>
-            <button onClick={sortHandBySuit} style={s.sortBtn}>♠ SEME</button>
-            <button onClick={sortHandByValue} style={s.sortBtn}>7 VALORE</button>
+            <button onClick={sortHandBySuit} style={s.sortBtnLarge}>♠ SEME</button>
+            <button onClick={sortHandByValue} style={s.sortBtnLarge}>7 VALORE</button>
             <button onClick={() => { setMoveMode(!moveMode); setMoveSelected([]); setSelected([]); }}
               style={Object.assign({}, s.sortBtn, {
                 color: moveMode ? '#f0c040' : '#4a8fa6',
@@ -749,14 +764,31 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
           <div style={s.hint('#3498db')}>COMBINAZIONE VALIDA - puoi abbassarla!</div>
         )}
 
-        {/* Cards */}
-        <div style={s.handCards}>
+        {/* Cards - Fan/semicircle layout */}
+        <div style={{
+          position: 'relative',
+          height: moveMode ? 110 : 130,
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'center',
+          marginBottom: 8,
+          paddingBottom: 4,
+        }}>
           {moveMode && moveSelected.length > 0 && (
-            <div onClick={() => moveCardsToPosition(0)} style={s.insertSlot} />
+            <div onClick={() => moveCardsToPosition(0)} style={Object.assign({}, s.insertSlot, { position: 'relative', zIndex: 200 })} />
           )}
           {myHand.map((card, idx) => {
             const isSelected = !!selected.find(c => c.id === card.id);
             const isMoveSelected = !!moveSelected.find(c => c.id === card.id);
+            const total = myHand.length;
+            const fanSpread = Math.min(30, total * 2.5);
+            const angleStep = total > 1 ? (fanSpread * 2) / (total - 1) : 0;
+            const angle = total > 1 ? -fanSpread + idx * angleStep : 0;
+            const centerIdx = (total - 1) / 2;
+            const distFromCenter = Math.abs(idx - centerIdx);
+            const vertOffset = distFromCenter * distFromCenter * 0.8;
+            const overlapOffset = moveMode ? idx * 46 : idx * 38;
+
             return (
               <React.Fragment key={card.id}>
                 <div
@@ -766,21 +798,37 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
                   onDrop={() => handleDrop(idx)}
                   onClick={() => toggleSelect(card)}
                   style={{
-                    marginLeft: idx === 0 ? 0 : (moveMode ? 4 : -24),
-                    zIndex: isMoveSelected || isSelected ? 100 : idx,
-                    position: 'relative',
-                    transition: 'margin 0.1s',
+                    position: 'absolute',
+                    bottom: vertOffset,
+                    left: overlapOffset,
+                    zIndex: isMoveSelected || isSelected ? 100 + idx : idx,
+                    transform: moveMode ? 'none' : 'rotate(' + angle + 'deg)',
+                    transformOrigin: 'bottom center',
+                    transition: 'transform 0.15s, bottom 0.15s',
                     opacity: isMoveSelected ? 0.5 : 1,
+                    WebkitTouchCallout: 'none',
+                    WebkitUserSelect: 'none',
+                    touchAction: 'manipulation',
                   }}
                 >
                   <Card card={card} selected={isMoveSelected || (!moveMode && isSelected)} />
                 </div>
                 {moveMode && moveSelected.length > 0 && !isMoveSelected && (
-                  <div onClick={() => moveCardsToPosition(idx + 1)} style={s.insertSlot} />
+                  <div
+                    onClick={() => moveCardsToPosition(idx + 1)}
+                    style={Object.assign({}, s.insertSlot, {
+                      position: 'absolute',
+                      bottom: 0,
+                      left: overlapOffset + 44,
+                      zIndex: 200,
+                    })}
+                  />
                 )}
               </React.Fragment>
             );
           })}
+          {/* Invisible spacer to push content right */}
+          <div style={{ width: myHand.length > 0 ? (myHand.length - 1) * 38 + 58 : 58, height: 1, flexShrink: 0 }} />
         </div>
 
         {/* My aperture badges */}
@@ -844,6 +892,71 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
           <button onClick={sendChat} style={s.chatSend}>INVIA</button>
         </div>
       </div>
+
+      {/* TABELLA MODAL */}
+      {showTabella && (
+        <div style={s.modalOverlay} onClick={() => setShowTabella(false)}>
+          <div style={Object.assign({}, s.modal, { maxWidth: 500, padding: 0, overflow: 'hidden' })}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(240,192,64,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ color: '#f0c040', fontWeight: 900, fontSize: 14, letterSpacing: 3 }}>SITUAZIONE</span>
+              <button onClick={() => setShowTabella(false)} style={{ background: 'none', border: 'none', color: '#4a6a7a', fontSize: 18, cursor: 'pointer' }}>✕</button>
+            </div>
+            <div style={{ overflowX: 'auto', padding: '8px 0' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, fontFamily: 'Georgia, serif' }}>
+                <thead>
+                  <tr>
+                    <th style={{ padding: '6px 10px', textAlign: 'left', color: '#2a4a5a', fontWeight: 700, fontSize: 9, borderBottom: '1px solid rgba(255,255,255,0.06)', minWidth: 80 }}></th>
+                    {sortedPlayers.map(p => (
+                      <th key={p.id} style={{ padding: '6px 10px', textAlign: 'center', color: p.color, fontWeight: 900, fontSize: 10, letterSpacing: 1, borderBottom: '1px solid rgba(255,255,255,0.06)', minWidth: 70 }}>
+                        {p.name && p.name.toUpperCase()}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {APERTURE_TYPES.map((a, i) => (
+                    <tr key={a.id} style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+                      <td style={{ padding: '6px 10px', color: '#6a8a9a', fontSize: 9, fontWeight: 700, letterSpacing: 0.5, borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        {a.label}
+                      </td>
+                      {sortedPlayers.map(p => {
+                        const used = p.apertureUsate && p.apertureUsate[a.id];
+                        const score = p.score || 0;
+                        const isWinner = room.handWinner === p.id;
+                        let cellContent = null;
+                        let cellColor = '#c0d4e0';
+                        if (used) {
+                          if (isWinner) {
+                            cellContent = '0';
+                            cellColor = '#2ecc71';
+                          } else {
+                            cellContent = score > 0 ? score : '✓';
+                            cellColor = score > 0 ? '#c0d4e0' : '#f0c040';
+                          }
+                        }
+                        return (
+                          <td key={p.id} style={{ padding: '6px 10px', textAlign: 'center', color: cellColor, fontWeight: 800, fontSize: 12, borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                            {cellContent}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                  <tr style={{ borderTop: '2px solid rgba(240,192,64,0.2)' }}>
+                    <td style={{ padding: '8px 10px', color: '#f0c040', fontSize: 9, fontWeight: 900, letterSpacing: 1 }}>TOTALE</td>
+                    {sortedPlayers.map(p => (
+                      <td key={p.id} style={{ padding: '8px 10px', textAlign: 'center', color: '#f0c040', fontWeight: 900, fontSize: 13 }}>
+                        {p.score || 0}
+                      </td>
+                    ))}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* JOKER MODAL */}
       {jokerModal && (
@@ -918,7 +1031,7 @@ const s = {
   aperturePlayerRow: { display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 },
   tableArea: { background: 'linear-gradient(180deg, #0d3a4a 0%, #0a2e3a 100%)', borderBottom: '2px solid rgba(10,140,180,0.15)', padding: '8px 12px' },
   otherPlayersRow: { display: 'flex', justifyContent: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' },
-  otherPlayerChip: { background: 'rgba(0,0,0,0.35)', border: '1px solid', borderRadius: 10, padding: '7px 10px', textAlign: 'center', minWidth: 75, transition: 'box-shadow 0.2s' },
+  otherPlayerChip: { background: 'rgba(0,0,0,0.3)', border: '1px solid', borderRadius: 8, padding: '6px 12px', display: 'flex', alignItems: 'center', transition: 'box-shadow 0.2s' },
   tableCombosArea: { minHeight: 50, marginBottom: 6 },
   tableCombos: { display: 'flex', flexWrap: 'wrap', gap: 6 },
   tableCombo: { background: 'rgba(0,0,0,0.3)', border: '1px solid', borderRadius: 7, padding: 6 },
@@ -934,6 +1047,7 @@ const s = {
   handCards: { display: 'flex', flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: 12, paddingTop: 4, minHeight: 96 },
   insertSlot: { width: 14, height: 84, borderRadius: 4, background: 'rgba(240,192,64,0.15)', border: '2px dashed rgba(240,192,64,0.5)', cursor: 'pointer', flexShrink: 0, alignSelf: 'flex-start', marginTop: 6 },
   sortBtn: { background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#4a8fa6', borderRadius: 5, padding: '3px 7px', fontSize: 8, cursor: 'pointer', letterSpacing: 0.5, fontFamily: 'Georgia, serif' },
+  sortBtnLarge: { background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(74,143,166,0.4)', color: '#4a8fa6', borderRadius: 7, padding: '5px 11px', fontSize: 11, cursor: 'pointer', letterSpacing: 0.5, fontFamily: 'Georgia, serif', fontWeight: 700 },
   clearBtn: { background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: '#4a6a7a', borderRadius: 5, padding: '3px 7px', fontSize: 8, cursor: 'pointer', fontFamily: 'Georgia, serif' },
   actions: { padding: '8px 12px 10px', background: 'rgba(0,0,0,0.5)', borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', gap: 8, flexWrap: 'wrap' },
   actionBtn: (color, textColor) => ({ flex: 1, padding: '11px 8px', borderRadius: 9, border: textColor ? 'none' : '1px solid ' + color + '44', background: textColor ? 'linear-gradient(135deg, ' + color + ', ' + color + 'cc)' : color + '18', color: textColor || color, fontWeight: 900, fontSize: 11, cursor: 'pointer', letterSpacing: 1, fontFamily: 'Georgia, serif' }),
