@@ -294,11 +294,25 @@ export function isPoker(cards) {
 export function isReale(cards) {
   if (cards.length !== 5) return false;
   if (!cards.every(c => c.suit === cards[0].suit)) return false;
-  const orders = cards.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
-  for (let i = 1; i < orders.length; i++) {
-    if (orders[i] !== orders[i - 1] + 1) return false;
+  return isSequential(cards);
+}
+
+// Check if cards form a valid sequence (handles A as high or low)
+function isSequential(cards) {
+  const nonJokers = cards.filter(c => !c.isJoker);
+  const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
+  // Check normal sequence
+  let gaps = 0;
+  for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i-1] - 1;
+  if (gaps === 0) return true;
+  // Check A as high (14) - if A is present and lowest
+  if (orders[0] === 1) {
+    const highOrders = orders.slice(1).concat([14]);
+    let highGaps = 0;
+    for (let i = 1; i < highOrders.length; i++) highGaps += highOrders[i] - highOrders[i-1] - 1;
+    if (highGaps === 0) return true;
   }
-  return true;
+  return false;
 }
 
 // Quaranta: one or more combinations totaling >= 40 points
@@ -382,11 +396,18 @@ export function isValidTableCombination(cards) {
   // Scala: min 3 same suit sequential, max 1 joker in gap
   if (nonJokers.every(c => c.suit === nonJokers[0].suit)) {
     const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
-    // No duplicate ranks
     if (new Set(orders).size !== orders.length) return false;
+    // Check normal sequence
     let gaps = 0;
     for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i - 1] - 1;
     if (gaps <= jokerCount && cards.length >= 3) return true;
+    // Check A as high (Q-K-A = 12-13-14)
+    if (orders[0] === 1) {
+      const highOrders = orders.slice(1).concat([14]);
+      let highGaps = 0;
+      for (let i = 1; i < highOrders.length; i++) highGaps += highOrders[i] - highOrders[i-1] - 1;
+      if (highGaps <= jokerCount && cards.length >= 3) return true;
+    }
   }
 
   // Tris with joker (2 cards + joker)
@@ -432,19 +453,19 @@ export function canAddToCombo(existingCards, newCards) {
     if (new Set(orders).size !== orders.length) {
       return { valid: false, reason: 'Rank duplicato nella scala!' };
     }
-    // Check sequential - with 1 joker allowed in one gap
+    // Check sequential - handle A as high or low
     let gaps = 0;
     for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i - 1] - 1;
-    if (gaps > jokerCount) {
-      return { valid: false, reason: 'Le carte non sono in sequenza!' };
+    let isValid = gaps <= jokerCount;
+    // Also try A as high (14)
+    if (!isValid && orders[0] === 1) {
+      const highOrders = orders.slice(1).concat([14]);
+      let highGaps = 0;
+      for (let i = 1; i < highOrders.length; i++) highGaps += highOrders[i] - highOrders[i-1] - 1;
+      isValid = highGaps <= jokerCount;
     }
-    // Also check asso in valid position (A-2-3 or Q-K-A)
-    if (allNonJokers.some(c => c.rank === 'A')) {
-      const hasLow = orders[0] === 1 && orders[1] <= 3;
-      const hasHigh = orders[orders.length - 1] === 1 || orders[orders.length - 2] >= 12;
-      if (!hasLow && !hasHigh && orders[0] === 1) {
-        return { valid: false, reason: 'L asso va solo in scale alte (Q-K-A) o basse (A-2-3)!' };
-      }
+    if (!isValid) {
+      return { valid: false, reason: 'Le carte non sono in sequenza!' };
     }
     // Max 2 cards added to existing scala
     const addedCount = newNonJokers.length + (newCards.some(c => c.isJoker) ? 1 : 0);
