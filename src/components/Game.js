@@ -764,72 +764,95 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
           <div style={s.hint('#3498db')}>COMBINAZIONE VALIDA - puoi abbassarla!</div>
         )}
 
-        {/* Cards - Fan/semicircle layout */}
-        <div style={{
-          position: 'relative',
-          height: moveMode ? 110 : 130,
-          display: 'flex',
-          alignItems: 'flex-end',
-          justifyContent: 'center',
-          marginBottom: 8,
-          paddingBottom: 4,
-        }}>
-          {moveMode && moveSelected.length > 0 && (
-            <div onClick={() => moveCardsToPosition(0)} style={Object.assign({}, s.insertSlot, { position: 'relative', zIndex: 200 })} />
-          )}
-          {myHand.map((card, idx) => {
-            const isSelected = !!selected.find(c => c.id === card.id);
-            const isMoveSelected = !!moveSelected.find(c => c.id === card.id);
-            const total = myHand.length;
-            const fanSpread = Math.min(30, total * 2.5);
-            const angleStep = total > 1 ? (fanSpread * 2) / (total - 1) : 0;
-            const angle = total > 1 ? -fanSpread + idx * angleStep : 0;
-            const centerIdx = (total - 1) / 2;
-            const distFromCenter = Math.abs(idx - centerIdx);
-            const vertOffset = distFromCenter * distFromCenter * 0.8;
-            const overlapOffset = moveMode ? idx * 46 : idx * 38;
+        {/* Cards - True fan layout from single bottom point */}
+        {(() => {
+          const total = myHand.length;
+          const fanSpread = Math.min(50, total * 4);
+          const angleStep = total > 1 ? (fanSpread * 2) / (total - 1) : 0;
+          const cardW = 58;
+          const cardH = 84;
+          const radius = 320; // virtual radius of the fan arc
+          const containerW = Math.min(window.innerWidth - 24, 500);
+          const centerX = containerW / 2;
+          const originY = cardH + radius; // origin point below container
 
-            return (
-              <React.Fragment key={card.id}>
-                <div
-                  draggable
-                  onDragStart={() => handleDragStart(idx)}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={() => handleDrop(idx)}
-                  onClick={() => toggleSelect(card)}
-                  style={{
-                    position: 'absolute',
-                    bottom: vertOffset,
-                    left: overlapOffset,
-                    zIndex: isMoveSelected || isSelected ? 100 + idx : idx,
-                    transform: moveMode ? 'none' : 'rotate(' + angle + 'deg)',
-                    transformOrigin: 'bottom center',
-                    transition: 'transform 0.15s, bottom 0.15s',
-                    opacity: isMoveSelected ? 0.5 : 1,
-                    WebkitTouchCallout: 'none',
-                    WebkitUserSelect: 'none',
-                    touchAction: 'manipulation',
-                  }}
-                >
-                  <Card card={card} selected={isMoveSelected || (!moveMode && isSelected)} />
-                </div>
-                {moveMode && moveSelected.length > 0 && !isMoveSelected && (
+          return (
+            <div style={{
+              position: 'relative',
+              height: moveMode ? 110 : 150,
+              width: '100%',
+              overflowX: moveMode ? 'auto' : 'visible',
+              overflowY: 'visible',
+              marginBottom: 4,
+            }}>
+              {moveMode && moveSelected.length > 0 && (
+                <div onClick={() => moveCardsToPosition(0)} style={Object.assign({}, s.insertSlot, { position: 'absolute', left: 0, bottom: 0, zIndex: 200 })} />
+              )}
+              {myHand.map((card, idx) => {
+                const isSelected = !!selected.find(c => c.id === card.id);
+                const isMoveSelected = !!moveSelected.find(c => c.id === card.id);
+                const angle = total > 1 ? -fanSpread + idx * angleStep : 0;
+                const angleRad = (angle * Math.PI) / 180;
+
+                // Position each card around the arc
+                const x = centerX + radius * Math.sin(angleRad) - cardW / 2;
+                const y = originY - radius * Math.cos(angleRad) - cardH;
+                const liftY = isSelected && !moveMode ? -18 : 0;
+
+                if (moveMode) {
+                  return (
+                    <React.Fragment key={card.id}>
+                      <div
+                        onClick={() => toggleSelect(card)}
+                        style={{
+                          position: 'absolute',
+                          left: idx * 46,
+                          bottom: isMoveSelected ? 20 : 0,
+                          zIndex: isMoveSelected || isSelected ? 100 + idx : idx,
+                          opacity: isMoveSelected ? 0.5 : 1,
+                          WebkitTouchCallout: 'none',
+                          WebkitUserSelect: 'none',
+                          touchAction: 'manipulation',
+                        }}
+                      >
+                        <Card card={card} selected={isMoveSelected} />
+                      </div>
+                      {moveSelected.length > 0 && !isMoveSelected && (
+                        <div onClick={() => moveCardsToPosition(idx + 1)}
+                          style={Object.assign({}, s.insertSlot, { position: 'absolute', left: idx * 46 + 48, bottom: 0, zIndex: 200 })} />
+                      )}
+                    </React.Fragment>
+                  );
+                }
+
+                return (
                   <div
-                    onClick={() => moveCardsToPosition(idx + 1)}
-                    style={Object.assign({}, s.insertSlot, {
+                    key={card.id}
+                    draggable
+                    onDragStart={() => handleDragStart(idx)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={() => handleDrop(idx)}
+                    onClick={() => toggleSelect(card)}
+                    style={{
                       position: 'absolute',
-                      bottom: 0,
-                      left: overlapOffset + 44,
-                      zIndex: 200,
-                    })}
-                  />
-                )}
-              </React.Fragment>
-            );
-          })}
-          {/* Invisible spacer to push content right */}
-          <div style={{ width: myHand.length > 0 ? (myHand.length - 1) * 38 + 58 : 58, height: 1, flexShrink: 0 }} />
-        </div>
+                      left: x,
+                      top: y + liftY,
+                      zIndex: isSelected ? 100 + idx : idx,
+                      transform: 'rotate(' + angle + 'deg)',
+                      transformOrigin: 'bottom center',
+                      transition: 'top 0.15s, transform 0.15s',
+                      WebkitTouchCallout: 'none',
+                      WebkitUserSelect: 'none',
+                      touchAction: 'manipulation',
+                    }}
+                  >
+                    <Card card={card} selected={isSelected} />
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
 
         {/* My aperture badges */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, paddingBottom: 6 }}>
