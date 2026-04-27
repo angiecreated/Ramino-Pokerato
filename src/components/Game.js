@@ -771,10 +771,11 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
             <button onClick={sortHandByValue} style={s.sortBtnLarge}>7 VALORE</button>
             <button onClick={() => { setMoveMode(!moveMode); setMoveSelected([]); setSelected([]); }}
               style={Object.assign({}, s.sortBtn, {
-                color: moveMode ? '#f0c040' : '#4a8fa6',
-                border: '1px solid ' + (moveMode ? 'rgba(240,192,64,0.4)' : 'rgba(255,255,255,0.1)'),
+                color: moveMode ? '#e74c3c' : '#4a8fa6',
+                border: '1px solid ' + (moveMode ? 'rgba(231,76,60,0.4)' : 'rgba(255,255,255,0.1)'),
+                fontWeight: moveMode ? 900 : 700,
               })}>
-              {moveMode ? 'ANNULLA' : 'SPOSTA'}
+              {moveMode ? '✕ ANNULLA' : 'SPOSTA'}
             </button>
             {!moveMode && selected.length > 0 && (
               <button onClick={() => { setSelected([]); setSelectionOrder([]); }} style={s.clearBtn}>
@@ -787,7 +788,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
         {/* Hints */}
         {moveMode && (
           <div style={s.hint('#f39c12')}>
-            {moveSelected.length === 0 ? 'TOCCA LE CARTE DA SPOSTARE' : 'TOCCA LA POSIZIONE DOVE INSERIRLE'}
+            {moveSelected.length === 0 ? '↕ TOCCA UNA CARTA PER SPOSTARLA' : '↕ TOCCA DOVE VUOI INSERIRE LE ' + moveSelected.length + ' CARTE'}
           </div>
         )}
         {!moveMode && selected.length > 0 && detectedApertura && !me.aperta && !(me.apertureUsate && me.apertureUsate[detectedApertura]) && (
@@ -1059,7 +1060,7 @@ const s = {
   deckLabel: { color: '#2a5a6a', fontSize: 9, letterSpacing: 1, marginBottom: 4 },
   deckCard: { width: 58, height: 84, borderRadius: 7, background: 'linear-gradient(135deg, #0d3a5c, #071f3a)', border: '1.5px solid rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   emptyDiscard: { width: 58, height: 84, borderRadius: 7, border: '2px dashed rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1a3a4a', fontSize: 9 },
-  handArea: { flex: 1, background: '#051520', padding: '10px 12px 0', borderTop: '2px solid rgba(10,100,140,0.25)' },
+  handArea: { flex: 1, background: '#051520', padding: '10px 12px 0', borderTop: '2px solid rgba(10,100,140,0.25)', overflowY: 'visible' },
   handHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 },
   hint: (color) => ({ background: color + '12', border: '1px solid ' + color + '35', borderRadius: 5, padding: '3px 8px', color: color, fontSize: 9, letterSpacing: 1, fontWeight: 800, marginBottom: 5 }),
   handCards: { display: 'flex', flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: 12, paddingTop: 4, minHeight: 96 },

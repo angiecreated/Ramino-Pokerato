@@ -316,24 +316,16 @@ function isSequential(cards) {
 }
 
 // Quaranta: one or more combinations totaling >= 40 points
-// Can be: a poker of 10s, two tris of J, two sequences, etc.
 export function isQuaranta(cards) {
   if (cards.length < 2) return false;
-  // Try to split cards into valid groups that total >= 40
-  return tryQuarantaGroups(cards);
-}
-
-function tryQuarantaGroups(cards) {
   const total = comboPoints(cards);
   if (total < 40) return false;
-  // Check if cards form one or more valid combinations
   return canFormValidGroups(cards);
 }
 
 function canFormValidGroups(cards) {
   if (cards.length === 0) return true;
-
-  // Try all possible first group sizes
+  // Try groups of min size 2 up to all cards
   for (let size = 2; size <= cards.length; size++) {
     const combos = getCombinations(cards, size);
     for (const combo of combos) {
@@ -347,8 +339,14 @@ function canFormValidGroups(cards) {
 }
 
 function isValidSingleGroup(cards) {
+  if (cards.length < 2) return false;
   const nonJokers = cards.filter(c => !c.isJoker);
   if (nonJokers.length === 0) return false;
+
+  // Coppia (2 same rank different suits) - valid as part of quaranta
+  if (cards.length === 2 && nonJokers.every(c => c.rank === nonJokers[0].rank)) {
+    return nonJokers[0].suit !== nonJokers[1].suit;
+  }
   // Tris (3 same rank different suits)
   if (cards.length === 3 && nonJokers.every(c => c.rank === nonJokers[0].rank)) {
     return new Set(nonJokers.map(c => c.suit)).size === nonJokers.length;
@@ -357,12 +355,21 @@ function isValidSingleGroup(cards) {
   if (cards.length === 4 && nonJokers.every(c => c.rank === nonJokers[0].rank)) {
     return new Set(nonJokers.map(c => c.suit)).size === nonJokers.length;
   }
-  // Scala (3+ same suit sequential)
+  // Scala (3+ same suit sequential, handles A high and low)
   if (cards.length >= 3 && nonJokers.every(c => c.suit === nonJokers[0].suit)) {
     const orders = nonJokers.map(c => RANK_ORDER[c.rank]).sort((a, b) => a - b);
+    if (new Set(orders).size !== orders.length) return false;
+    // Normal sequence
     let gaps = 0;
     for (let i = 1; i < orders.length; i++) gaps += orders[i] - orders[i - 1] - 1;
-    return gaps === 0;
+    if (gaps === 0) return true;
+    // A as high (Q-K-A)
+    if (orders[0] === 1) {
+      const highOrders = orders.slice(1).concat([14]);
+      let highGaps = 0;
+      for (let i = 1; i < highOrders.length; i++) highGaps += highOrders[i] - highOrders[i-1] - 1;
+      if (highGaps === 0) return true;
+    }
   }
   return false;
 }
