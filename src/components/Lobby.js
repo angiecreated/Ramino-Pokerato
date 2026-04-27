@@ -77,7 +77,7 @@ export default function Lobby({ onGameStart }) {
   return (
     <div style={s.screen}>
       <div style={s.hero}>
-        <h1 style={s.title}>POKERAMI</h1>
+        <img src="/logo.jpeg" alt="Pokerami" style={{ width: 180, height: 180, objectFit: 'contain', marginBottom: 8 }} />
         <p style={s.subtitle2}>RAMINO POKERATO</p>
         <p style={s.subtitle}>La variante pazza</p>
       </div>

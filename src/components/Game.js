@@ -544,7 +544,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     setMoveMode(false);
   };
 
-  // DRAG AND DROP (desktop)
+  // DRAG AND DROP (desktop + touch iOS)
   const handleDragStart = (idx) => { dragRef.current.startIdx = idx; };
   const handleDrop = async (idx) => {
     const si = dragRef.current.startIdx;
@@ -554,6 +554,41 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
     const [moved] = newHand.splice(si, 1);
     newHand.splice(idx, 0, moved);
     await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: newHand });
+  };
+
+  // Touch events for iOS card reordering in move mode
+  const handleTouchStartCard = (e, idx) => {
+    dragRef.current.startIdx = idx;
+    dragRef.current.startX = e.touches[0].clientX;
+    dragRef.current.startY = e.touches[0].clientY;
+    dragRef.current.moved = false;
+  };
+
+  const handleTouchMoveCard = (e) => {
+    const dx = Math.abs(e.touches[0].clientX - dragRef.current.startX);
+    const dy = Math.abs(e.touches[0].clientY - dragRef.current.startY);
+    if (dx > 8 || dy > 8) dragRef.current.moved = true;
+  };
+
+  const handleTouchEndCard = async (e, idx, card) => {
+    if (!dragRef.current.moved) {
+      // Simple tap - select card
+      toggleSelect(card);
+    } else if (moveMode && moveSelected.length > 0) {
+      // Dragged in move mode - move to position
+      await moveCardsToPosition(idx);
+    } else {
+      // Dragged normally - reorder
+      const si = dragRef.current.startIdx;
+      if (si !== null && si !== idx) {
+        const newHand = [...myHand];
+        const [moved] = newHand.splice(si, 1);
+        newHand.splice(idx, 0, moved);
+        await update(ref(db, 'rooms/' + roomCode), { ['hands/' + playerId]: newHand });
+      }
+    }
+    dragRef.current.startIdx = null;
+    dragRef.current.moved = false;
   };
 
   const sortedPlayers = playerOrder.map((pid, i) => Object.assign({}, players[pid], {
@@ -764,92 +799,52 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
           <div style={s.hint('#3498db')}>COMBINAZIONE VALIDA - puoi abbassarla!</div>
         )}
 
-        {/* Cards - True fan layout from single bottom point */}
+        {/* Cards - Two rows layout */}
         {(() => {
-          const total = myHand.length;
-          const fanSpread = Math.min(50, total * 4);
-          const angleStep = total > 1 ? (fanSpread * 2) / (total - 1) : 0;
-          const cardW = 58;
-          const cardH = 84;
-          const radius = 320; // virtual radius of the fan arc
-          const containerW = Math.min(window.innerWidth - 24, 500);
-          const centerX = containerW / 2;
-          const originY = cardH + radius; // origin point below container
-
-          return (
-            <div style={{
-              position: 'relative',
-              height: moveMode ? 110 : 150,
-              width: '100%',
-              overflowX: moveMode ? 'auto' : 'visible',
-              overflowY: 'visible',
-              marginBottom: 4,
-            }}>
-              {moveMode && moveSelected.length > 0 && (
-                <div onClick={() => moveCardsToPosition(0)} style={Object.assign({}, s.insertSlot, { position: 'absolute', left: 0, bottom: 0, zIndex: 200 })} />
-              )}
-              {myHand.map((card, idx) => {
+          const row1 = myHand.slice(0, Math.ceil(myHand.length / 2));
+          const row2 = myHand.slice(Math.ceil(myHand.length / 2));
+          const renderRow = (rowCards, startIdx) => (
+            <div style={{ display: 'flex', overflowX: 'auto', paddingBottom: 4, WebkitOverflowScrolling: 'touch' }}>
+              {rowCards.map((card, i) => {
+                const idx = startIdx + i;
                 const isSelected = !!selected.find(c => c.id === card.id);
                 const isMoveSelected = !!moveSelected.find(c => c.id === card.id);
-                const angle = total > 1 ? -fanSpread + idx * angleStep : 0;
-                const angleRad = (angle * Math.PI) / 180;
-
-                // Position each card around the arc
-                const x = centerX + radius * Math.sin(angleRad) - cardW / 2;
-                const y = originY - radius * Math.cos(angleRad) - cardH;
-                const liftY = isSelected && !moveMode ? -18 : 0;
-
-                if (moveMode) {
-                  return (
-                    <React.Fragment key={card.id}>
-                      <div
-                        onClick={() => toggleSelect(card)}
-                        style={{
-                          position: 'absolute',
-                          left: idx * 46,
-                          bottom: isMoveSelected ? 20 : 0,
-                          zIndex: isMoveSelected || isSelected ? 100 + idx : idx,
-                          opacity: isMoveSelected ? 0.5 : 1,
-                          WebkitTouchCallout: 'none',
-                          WebkitUserSelect: 'none',
-                          touchAction: 'manipulation',
-                        }}
-                      >
-                        <Card card={card} selected={isMoveSelected} />
-                      </div>
-                      {moveSelected.length > 0 && !isMoveSelected && (
-                        <div onClick={() => moveCardsToPosition(idx + 1)}
-                          style={Object.assign({}, s.insertSlot, { position: 'absolute', left: idx * 46 + 48, bottom: 0, zIndex: 200 })} />
-                      )}
-                    </React.Fragment>
-                  );
-                }
-
                 return (
-                  <div
-                    key={card.id}
-                    draggable
-                    onDragStart={() => handleDragStart(idx)}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={() => handleDrop(idx)}
-                    onClick={() => toggleSelect(card)}
-                    style={{
-                      position: 'absolute',
-                      left: x,
-                      top: y + liftY,
-                      zIndex: isSelected ? 100 + idx : idx,
-                      transform: 'rotate(' + angle + 'deg)',
-                      transformOrigin: 'bottom center',
-                      transition: 'top 0.15s, transform 0.15s',
-                      WebkitTouchCallout: 'none',
-                      WebkitUserSelect: 'none',
-                      touchAction: 'manipulation',
-                    }}
-                  >
-                    <Card card={card} selected={isSelected} />
-                  </div>
+                  <React.Fragment key={card.id}>
+                    <div
+                      onTouchStart={(e) => handleTouchStartCard(e, idx)}
+                      onTouchMove={(e) => handleTouchMoveCard(e)}
+                      onTouchEnd={(e) => handleTouchEndCard(e, idx, card)}
+                      style={{
+                        marginLeft: i === 0 ? 0 : -20,
+                        zIndex: isSelected ? 100 + idx : idx,
+                        position: 'relative',
+                        flexShrink: 0,
+                        transform: isSelected ? 'translateY(-10px)' : 'none',
+                        transition: 'transform 0.15s',
+                        opacity: isMoveSelected ? 0.5 : 1,
+                        WebkitTouchCallout: 'none',
+                        WebkitUserSelect: 'none',
+                        touchAction: 'manipulation',
+                      }}
+                    >
+                      <Card card={card} selected={isSelected && !moveMode} />
+                    </div>
+                    {moveMode && moveSelected.length > 0 && !isMoveSelected && (
+                      <div onClick={() => moveCardsToPosition(idx + 1)} style={s.insertSlot} />
+                    )}
+                  </React.Fragment>
                 );
               })}
+            </div>
+          );
+          return (
+            <div style={{ marginBottom: 4 }}>
+              {moveMode && moveSelected.length > 0 && (
+                <div onClick={() => moveCardsToPosition(0)} style={s.insertSlot} />
+              )}
+              {renderRow(row1, 0)}
+              {renderRow(row2, row1.length)}
             </div>
           );
         })()}
@@ -1052,7 +1047,7 @@ const s = {
   msgBar: { padding: '7px 14px', textAlign: 'center', fontSize: 12, border: '1px solid', letterSpacing: 1, fontWeight: 700 },
   aperturePanel: { background: 'rgba(0,0,0,0.4)', borderBottom: '1px solid rgba(255,255,255,0.04)', padding: '8px 12px', maxHeight: 160, overflowY: 'auto' },
   aperturePlayerRow: { display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 },
-  tableArea: { background: 'linear-gradient(180deg, #0d3a4a 0%, #0a2e3a 100%)', borderBottom: '2px solid rgba(10,140,180,0.15)', padding: '8px 12px' },
+  tableArea: { background: 'linear-gradient(180deg, #0d3a4a 0%, #0a2e3a 100%)', backgroundImage: 'url(/pattern.png)', backgroundSize: '300px 300px', backgroundBlendMode: 'overlay', borderBottom: '2px solid rgba(10,140,180,0.15)', padding: '8px 12px' },
   otherPlayersRow: { display: 'flex', justifyContent: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' },
   otherPlayerChip: { background: 'rgba(0,0,0,0.3)', border: '1px solid', borderRadius: 8, padding: '6px 12px', display: 'flex', alignItems: 'center', transition: 'box-shadow 0.2s' },
   tableCombosArea: { minHeight: 50, marginBottom: 6 },
