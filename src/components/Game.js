@@ -800,12 +800,22 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
           <div style={s.hint('#3498db')}>COMBINAZIONE VALIDA - puoi abbassarla!</div>
         )}
 
-        {/* Cards - Two rows layout */}
+        {/* Cards - Two rows layout with move slots */}
         {(() => {
-          const row1 = myHand.slice(0, Math.ceil(myHand.length / 2));
-          const row2 = myHand.slice(Math.ceil(myHand.length / 2));
+          const half = Math.ceil(myHand.length / 2);
+          const row1 = myHand.slice(0, half);
+          const row2 = myHand.slice(half);
+
           const renderRow = (rowCards, startIdx) => (
-            <div style={{ display: 'flex', overflowX: 'auto', paddingBottom: 4, WebkitOverflowScrolling: 'touch' }}>
+            <div style={{
+              display: 'flex', alignItems: 'flex-end',
+              overflowX: 'auto', overflowY: 'visible',
+              paddingBottom: 6, paddingTop: 20,
+              WebkitOverflowScrolling: 'touch',
+            }}>
+              {moveMode && moveSelected.length > 0 && (
+                <div onClick={() => moveCardsToPosition(startIdx)} style={s.insertSlot} />
+              )}
               {rowCards.map((card, i) => {
                 const idx = startIdx + i;
                 const isSelected = !!selected.find(c => c.id === card.id);
@@ -816,17 +826,20 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
                       onTouchStart={(e) => handleTouchStartCard(e, idx)}
                       onTouchMove={(e) => handleTouchMoveCard(e)}
                       onTouchEnd={(e) => handleTouchEndCard(e, idx, card)}
+                      onClick={() => toggleSelect(card)}
                       style={{
-                        marginLeft: i === 0 ? 0 : -20,
-                        zIndex: isSelected ? 100 + idx : idx,
+                        marginLeft: moveMode ? 2 : (i === 0 ? 0 : -20),
+                        zIndex: isSelected ? 500 : isMoveSelected ? 400 : idx + 1,
                         position: 'relative',
                         flexShrink: 0,
-                        transform: isSelected ? 'translateY(-10px)' : 'none',
+                        transform: isSelected && !moveMode ? 'translateY(-16px) scale(1.05)' : 'none',
                         transition: 'transform 0.15s',
-                        opacity: isMoveSelected ? 0.5 : 1,
+                        opacity: isMoveSelected ? 0.4 : 1,
                         WebkitTouchCallout: 'none',
                         WebkitUserSelect: 'none',
                         touchAction: 'manipulation',
+                        boxShadow: isMoveSelected ? '0 0 0 3px #f0c040' : 'none',
+                        borderRadius: 7,
                       }}
                     >
                       <Card card={card} selected={isSelected && !moveMode} />
@@ -839,13 +852,11 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
               })}
             </div>
           );
+
           return (
-            <div style={{ marginBottom: 4 }}>
-              {moveMode && moveSelected.length > 0 && (
-                <div onClick={() => moveCardsToPosition(0)} style={s.insertSlot} />
-              )}
+            <div style={{ overflow: 'visible', position: 'relative' }}>
               {renderRow(row1, 0)}
-              {renderRow(row2, row1.length)}
+              {renderRow(row2, half)}
             </div>
           );
         })()}
@@ -1038,7 +1049,7 @@ export default function Game({ roomCode, playerId, playerName, room: initialRoom
 }
 
 const s = {
-  root: { minHeight: '100vh', background: 'linear-gradient(180deg, #061a26 0%, #0a2e3d 40%, #061a26 100%)', fontFamily: 'Georgia, serif', color: '#e0eaf4', display: 'flex', flexDirection: 'column', userSelect: 'none' },
+  root: { minHeight: '100vh', background: 'linear-gradient(180deg, #061a26 0%, #0a2e3d 40%, #061a26 100%)', fontFamily: 'Georgia, serif', color: '#e0eaf4', display: 'flex', flexDirection: 'column', userSelect: 'none', overflowX: 'hidden' },
   loading: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#061a26', color: '#f0c040', fontSize: 18, letterSpacing: 3 },
   header: { background: 'rgba(0,0,0,0.6)', borderBottom: '1px solid rgba(255,255,255,0.05)', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 },
   headerTitle: { color: '#f0c040', fontWeight: 900, fontSize: 16, letterSpacing: 4 },
@@ -1060,7 +1071,7 @@ const s = {
   deckLabel: { color: '#2a5a6a', fontSize: 9, letterSpacing: 1, marginBottom: 4 },
   deckCard: { width: 58, height: 84, borderRadius: 7, background: 'linear-gradient(135deg, #0d3a5c, #071f3a)', border: '1.5px solid rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   emptyDiscard: { width: 58, height: 84, borderRadius: 7, border: '2px dashed rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1a3a4a', fontSize: 9 },
-  handArea: { flex: 1, background: '#051520', padding: '10px 12px 0', borderTop: '2px solid rgba(10,100,140,0.25)', overflowY: 'visible' },
+  handArea: { flex: 1, background: '#051520', padding: '10px 12px 0', borderTop: '2px solid rgba(10,100,140,0.25)', overflow: 'visible' },
   handHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 },
   hint: (color) => ({ background: color + '12', border: '1px solid ' + color + '35', borderRadius: 5, padding: '3px 8px', color: color, fontSize: 9, letterSpacing: 1, fontWeight: 800, marginBottom: 5 }),
   handCards: { display: 'flex', flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: 12, paddingTop: 4, minHeight: 96 },
